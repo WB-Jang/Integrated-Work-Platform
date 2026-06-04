@@ -1,0 +1,50 @@
+# Docker 빌드 컨텍스트 제외 — 이미지·푸시 용량 절감
+# 모델/로그/업로드/캐시는 이미지에 절대 포함하지 않음.
+
+# 대용량 모델 (빌드 단계에서 download_models.py 가 다시 받음)
+models/
+*.gguf
+
+# 런타임 산출물
+logs/
+uploads/
+report_uploads/
+report_outputs/
+src/temp_uploads/
+src/temp_output/
+nicegui_port/
+nicegui_port_v2/
+
+# 빌드 캐시
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 백업 / 임시 파일
+*.bak
+*.tmp
+*.swp
+*.swo
+*~
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Git
+.git/
+.gitignore
+
+# 로컬 전용 설정·로그
+launcher.log
+pip_install.log
+menu_state.json
+Reporting/
+test_materials/
+create_test_materials.py

@@ -1,0 +1,114 @@
+{
+  "_comment": "llama-server.exe와 GGUF 모델 경로는 절대 경로 또는 이 파일 기준 상대 경로",
+  "llm_base_url": "http://localhost:8080/v1",
+  "model_name": "llama-3-Korean-Bllossom-8B-Q4_K_M",
+  "model_path": "../Committee_Agent_Workspace_Version/models/llama-3-Korean-Bllossom-8B-Q4_K_M.gguf",
+  "llama_server_exe": "../Committee_Agent_Workspace_Version/llama-b9143-bin-win-cpu-x64/llama-server.exe",
+  "llm_port": 8080,
+  "app_port": 7860,
+  "n_ctx": 8192,
+  "llm_max_tokens": 8192,
+  "n_gpu_layers": 0,
+  "host": "0.0.0.0",
+
+  "_comment_openai": "OpenAI API 키는 반드시 환경변수 OPENAI_API_KEY (HF Spaces Secrets 또는 .env)로만 주입하세요. config.json 의 api_key 필드는 항상 비워둘 것.",
+  "openai": {
+    "api_key": "",
+    "base_url": "https://api.openai.com/v1",
+    "timeout": 600
+  },
+
+  "_comment_openrouter": "OpenRouter API 키는 반드시 환경변수 OPENROUTER_API_KEY로만 주입하세요. config.json 의 api_key 필드는 항상 비워둘 것 (HF Spaces Public 저장소에 노출 위험).",
+  "openrouter": {
+    "api_key": "",
+    "base_url": "https://openrouter.ai/api/v1"
+  },
+
+  "_comment_llms": "각 기능별 LLM 설정. provider: 'local'(로컬 llama-server) 또는 'openai' (OpenAI 직통) 또는 'openrouter'",
+  "_comment_committee_llm": "HF Spaces 환경에서는 로컬 llama-server 가 실행되지 않으므로 provider=openai (gpt-5-mini) 가 기본. 로컬 데스크톱 운영 시 'local' 로 변경 가능.",
+  "committee_llm": {
+    "provider": "openai",
+    "base_url": "http://localhost:8080/v1",
+    "api_key": "not-needed",
+    "model": "gpt-5-mini",
+    "max_tokens": 8192,
+    "timeout": 1200,
+    "temperature": 0
+  },
+
+  "legal_llm": {
+    "provider": "openrouter",
+    "model": "openai/gpt-oss-20b",
+    "max_tokens": 8192,
+    "temperature": 0.7
+  },
+
+  "legal_keyword_llm": {
+    "provider": "openrouter",
+    "model": "openai/gpt-oss-20b",
+    "max_tokens": 8192,
+    "temperature": 0.0
+  },
+
+  "legal_summary_llm": {
+    "provider": "openrouter",
+    "model": "openai/gpt-oss-20b",
+    "max_tokens": 8192,
+    "temperature": 0.7
+  },
+
+  "legal_memory_llm": {
+    "provider": "openrouter",
+    "model": "openai/gpt-oss-20b",
+    "max_tokens": 8192,
+    "temperature": 0.3
+  },
+
+  "_comment_legal_db": "임베딩/리랭크 서버 없으면 키워드 검색으로 자동 대체됨",
+  "legal_embedding": {
+    "url": "http://127.0.0.1:8081",
+    "model": "bge-m3",
+    "timeout": 45
+  },
+
+  "legal_rerank": {
+    "url": "http://127.0.0.1:8082/rerank",
+    "timeout": 30
+  },
+
+  "legal_db": {
+    "faiss_dir": "./legal_db",
+    "faiss_index": "privacy_idx.index",
+    "faiss_store": "privacy_store.json",
+    "default_rank": 5,
+    "default_rerank": 3
+  },
+
+  "legal_memory": {
+    "max_chars": 5000
+  },
+
+  "_comment_reporting": "보고서 작성 설정",
+  "reporting": {
+    "reporting_dir": "./Reporting",
+    "upload_base_dir": "./report_uploads",
+    "output_base_dir": "./report_outputs"
+  },
+
+  "_comment_llm_chunk_model": "LLM 청킹 기본 모델/타임아웃. 실제로는 DB 구축 시 사이드바에서 선택한 모델·provider 가 주입되어 사용됨. 아래 값은 모델 미선택 시 fallback. timeout(초)은 넉넉히.",
+  "llm_chunk_model": "gpt-5-mini",
+  "llm_chunk_timeout": 600,
+  "_comment_llm_chunk_concurrency": "DB 구축 시 파일 단위 LLM 청킹 동시 실행 수. 클수록 빠르나 API 레이트리밋 위험. 4~8 권장.",
+  "llm_chunk_concurrency": 4,
+
+  "_comment_uploads": "문서 분석/요약 업로드 파일 저장 경로",
+  "upload_dir": "./uploads",
+
+  "_comment_regulatory": "규제 동향 수집 설정. fss_api_key: 금융감독원 Open API 키 (없으면 FSS 수집 생략)",
+  "fss_api_key": "",
+
+  "_comment_ip_user_map": "접속 IP→사용자 이름 매핑 (이니셜 입력 대체, 로그 식별용). 미등록 IP 는 IP 문자열로 기록. HF Spaces/프록시 환경은 X-Forwarded-For 의 첫 IP 사용.",
+  "ip_user_map": {
+    "127.0.0.1": "로컬테스트"
+  }
+}

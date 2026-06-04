@@ -1,0 +1,40 @@
+# Integrated Work Platform — HF Spaces (Linux/Docker) 의존성
+# Windows 빌드 전용(llama-cpp-python, pyinstaller, pywin32 등)은 제외.
+# 로컬 LLM 서버는 HF에서 사용하지 않고 OpenRouter 로 라우팅됩니다.
+
+# ── UI ──────────────────────────────────────────────────────────────────────
+nicegui
+
+# ── 문서 처리 ───────────────────────────────────────────────────────────────
+python-docx
+pypdf
+unstructured
+pyhwp
+
+# ── LLM / RAG ───────────────────────────────────────────────────────────────
+langchain
+langchain-community
+langchain-openai
+langgraph
+
+# ── 임베딩/리랭크 서버 ──────────────────────────────────────────────────────
+sentence-transformers
+huggingface_hub
+faiss-cpu
+numpy
+scikit-learn
+
+# ── 서버 인프라 ─────────────────────────────────────────────────────────────
+fastapi
+uvicorn
+sse-starlette
+starlette-context
+pydantic-settings
+
+# ── 기타 ────────────────────────────────────────────────────────────────────
+requests
+feedparser
+pandas
+openpyxl
+nltk
+python-dotenv

@@ -1,0 +1,40 @@
+# ── Secrets ─────────────────────────────────────────────────────────────────
+.env
+.env.local
+*.secrets.json
+secrets.json
+
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.venv/
+venv/
+
+# ── 런타임 산출물 ──────────────────────────────────────────────────────────
+uploads/
+report_uploads/
+report_outputs/
+temp_uploads/
+temp_output/
+logs/
+*.log
+launcher.log
+pip_install.log
+
+# ── 모델/대용량 자산 ───────────────────────────────────────────────────────
+models/
+legal_db/*.index
+legal_db/*.json
+
+# ── IDE ────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.bak
+*.swp
+.DS_Store
+desktop.ini
+
+# Windows download metadata
+*:Zone.Identifier

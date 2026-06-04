@@ -1,0 +1,10 @@
+{
+  "analysis": true,
+  "summary": true,
+  "legal": true,
+  "convert": true,
+  "reporting": true,
+  "outlook": true,
+  "regulatory": true,
+  "risk_dashboard": true
+}
