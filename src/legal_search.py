@@ -81,11 +81,30 @@ class LegalSearchAgent:
         except ImportError:
             return
 
-        for idx_file in sorted(faiss_dir.glob("*_idx.index")):
-            law_name = idx_file.stem[: -len("_idx")]
-            store_file = faiss_dir / f"{law_name}_store.json"
-            if not store_file.exists():
-                continue
+        # store JSON이 있는 법령을 모두 수집 (index 파일 유무와 무관)
+        store_files = sorted(faiss_dir.glob("*_store.json"))
+        for store_file in store_files:
+            law_name = store_file.stem[: -len("_store")]
+            idx_file = faiss_dir / f"{law_name}_idx.index"
+
+            # index 파일이 없으면 store JSON으로 자동 재구축
+            if not idx_file.exists():
+                from logger import get_logger as _gl
+                _gl("legal_search").info(
+                    "index 파일 없음, store에서 재구축 시작: %s", law_name
+                )
+                try:
+                    from legal_db_builder import rebuild_index_from_store
+                    ok = rebuild_index_from_store(str(store_file), str(idx_file))
+                    if not ok:
+                        from logger import get_logger as _gl2
+                        _gl2("legal_search").warning("index 재구축 실패, 건너뜀: %s", law_name)
+                        continue
+                except Exception as e:
+                    from logger import get_logger as _gl3
+                    _gl3("legal_search").warning("index 재구축 오류 (%s): %s", law_name, e)
+                    continue
+
             try:
                 from legal_db_builder import faiss_read_index_safe
                 index = faiss_read_index_safe(str(idx_file))

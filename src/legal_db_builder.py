@@ -333,6 +333,48 @@ def clear_index(output_dir: str, law_name: str = "", store_filename: str = "", i
     log.info("DB 초기화 완료: %s (%s)", output_dir, law_name or store_filename)
 
 
+def rebuild_index_from_store(store_path: str, index_path: str, batch_size: int = 16, progress_callback=None) -> bool:
+    """
+    store JSON 파일로부터 FAISS index를 재구축합니다.
+    git에 바이너리 index 파일이 없을 때 앱 시작 시 자동 호출됩니다.
+
+    Returns:
+        True if successful, False otherwise
+    """
+    import faiss
+
+    try:
+        with open(store_path, encoding="utf-8") as f:
+            docs: dict[int, str] = {int(k): v for k, v in json.load(f).items()}
+    except Exception as e:
+        log.warning("store 로드 실패 (%s): %s", store_path, e)
+        return False
+
+    if not docs:
+        return False
+
+    chunks = [docs[i] for i in sorted(docs.keys())]
+    log.info("store에서 FAISS index 재구축 중: %d 청크 (%s)", len(chunks), store_path)
+
+    try:
+        vectors = _embed_chunks(chunks, batch_size=batch_size, progress_callback=progress_callback)
+    except Exception as e:
+        log.warning("임베딩 실패 (%s): %s", store_path, e)
+        return False
+
+    dim = vectors.shape[1]
+    index = faiss.IndexFlatIP(dim)
+    index.add(vectors)
+
+    try:
+        faiss_write_index_safe(index, index_path)
+        log.info("FAISS index 재구축 완료: %s (dim=%d, n=%d)", index_path, dim, len(chunks))
+        return True
+    except Exception as e:
+        log.warning("index 저장 실패 (%s): %s", index_path, e)
+        return False
+
+
 def list_law_indexes(output_dir: str) -> list[dict]:
     """법령별 인덱스 목록 반환. {law_name, doc_count, store_kb, index_kb} 목록."""
     result = []
