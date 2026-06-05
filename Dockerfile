@@ -55,6 +55,12 @@ COPY --chown=user:user . /app
 # 쓰기 가능 디렉토리 보장 (ephemeral) — 비루트 사용자 권한 안정성
 RUN mkdir -p /app/logs /app/uploads /app/report_uploads /app/report_outputs
 
+# ── FAISS 인덱스 빌드타임 생성 (재시작 루프 방지) ───────────────────────────
+# legal_db/*_store.json → *_idx.index 를 빌드 단계에서 미리 임베딩하여 이미지에 굽는다.
+# 이렇게 하면 컨테이너 기동 시 인덱스를 재구축할 필요가 없어 OOM/health-timeout
+# 재시작 루프가 사라진다. (모델은 위 download_models.py 가 받아둔 /app/models/bge-m3 사용)
+RUN python /app/scripts/build_legal_indexes.py
+
 # HF Spaces 는 7860 노출
 EXPOSE 7860
 
