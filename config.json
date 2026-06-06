@@ -80,8 +80,8 @@
     "faiss_dir": "./legal_db",
     "faiss_index": "privacy_idx.index",
     "faiss_store": "privacy_store.json",
-    "default_rank": 5,
-    "default_rerank": 3
+    "default_rank": 20,
+    "default_rerank": 10
   },
 
   "legal_memory": {
