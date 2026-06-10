@@ -76,6 +76,7 @@ from agent_console import build_agent_panel
 import menu_state as _msm
 import user_memory
 from persona import get_persona_block
+from timer_utils import ClientBoundTimer
 from logger import get_logger, set_current_user, register_client_user, unregister_client_user
 
 from ui_styles import inject_global_css   # ← 신규: 모노크롬 디자인 시스템
@@ -897,6 +898,25 @@ def main_page(request: Request):
 </script>
 ''')
 
+    # ── 채팅 입력창 공통: 일반 Enter 의 기본동작(줄바꿈 삽입) 차단 ──────────
+    # 전송은 서버측 keydown.enter 핸들러가 수행한다. 기본동작을 막지 않으면
+    # 전송 직후 textarea 에 줄바꿈이 삽입되고, 그 입력 이벤트가 서버의
+    # value='' 초기화와 경합하여 입력창에 텍스트가 잔류하는 문제가 발생한다.
+    # Shift+Enter(줄바꿈)와 한글 IME 조합 중 Enter(조합 확정)는 그대로 둔다.
+    ui.add_body_html('''
+<script>
+(function(){
+  document.addEventListener('keydown', function(e){
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+    const t = e.target;
+    if (t && t.tagName === 'TEXTAREA' && t.closest('.composer')) {
+      e.preventDefault();
+    }
+  }, true);
+})();
+</script>
+''')
+
     # ──────────────────────────────────────────────────────────────────────
     # MAIN AREA
     # ──────────────────────────────────────────────────────────────────────
@@ -962,13 +982,40 @@ def main_page(request: Request):
                         '</div>'
                     )
 
+                _home_busy = {'v': False}
+
+                def _set_home_busy(busy: bool):
+                    """답변 생성 중 전송 버튼 비활성화 (+ _home_busy 로 중복 전송 차단)."""
+                    _home_busy['v'] = busy
+                    try:
+                        if busy:
+                            send_btn.props('disabled')
+                            send_btn.classes(add='is-disabled')
+                        else:
+                            send_btn.props(remove='disabled')
+                            send_btn.classes(remove='is-disabled')
+                    except Exception:
+                        pass
+
                 async def _home_send(msg_text: str = None):
                     if not llm_status.guard():
                         return
+                    if _home_busy['v']:
+                        return  # 답변 생성 중 — 추가 전송 차단
                     msg = (msg_text if msg_text is not None else home_input.value or '').strip()
                     if not msg:
                         return
+                    _set_home_busy(True)
                     home_input.value = ''
+                    try:
+                        await _do_home_send(msg)
+                    finally:
+                        _set_home_busy(False)
+                        # 전송 직후 늦게 도착한 클라이언트 입력 이벤트가 서버 값을
+                        # 복원하는 레이스 대비 — 답변 완료 시점에 한 번 더 비움
+                        home_input.value = ''
+
+                async def _do_home_send(msg: str):
                     home_history.append({'role': 'user', 'content': msg})
 
                     # 첫 메시지면 empty state 숨기고 채팅 영역 표시
@@ -1069,10 +1116,12 @@ def main_page(request: Request):
                         b.on('click', lambda _e, p=prompt: asyncio.create_task(_home_send(p)))
                         _gate_llm_button(b, native=True)
 
-                # Enter 키 전송
+                # Enter 키 전송 (Shift+Enter 줄바꿈, 한글 IME 조합 중 Enter 무시)
                 async def _home_enter_key(e):
-                    if not (isinstance(e.args, dict) and e.args.get('shiftKey')):
-                        await _home_send()
+                    args = e.args if isinstance(e.args, dict) else {}
+                    if args.get('shiftKey') or args.get('isComposing'):
+                        return
+                    await _home_send()
 
                 home_input.on('keydown.enter', _home_enter_key)
                 send_btn.on('click', lambda _e: asyncio.create_task(_home_send()))
@@ -2692,9 +2741,26 @@ def _build_qa_panel(parent, state, create_llm_fn):
                 blocks.append(f'[문서 {i} — {name} (score={score:.3f})]\n{ch}')
             return '\n\n'.join(blocks)
 
+        _qa_busy = {'v': False}
+
+        def _set_qa_busy(busy: bool):
+            """답변 생성 중 전송 버튼 비활성화 (+ _qa_busy 로 중복 전송 차단)."""
+            _qa_busy['v'] = busy
+            try:
+                if busy:
+                    qrefs['send'].props('disabled')
+                    qrefs['send'].classes(add='is-disabled')
+                else:
+                    qrefs['send'].props(remove='disabled')
+                    qrefs['send'].classes(remove='is-disabled')
+            except Exception:
+                pass
+
         async def send_qa_message():
             if not llm_status.guard():
                 return
+            if _qa_busy['v']:
+                return  # 답변 생성 중 — 추가 전송 차단
             set_current_user(state.get('user_initials', '-'))
             q = (qrefs['input'].value or '').strip()
             if not q:
@@ -2706,7 +2772,16 @@ def _build_qa_panel(parent, state, create_llm_fn):
                 )
                 return
 
+            _set_qa_busy(True)
             qrefs['input'].value = ''
+            try:
+                await _do_send_qa(q)
+            finally:
+                _set_qa_busy(False)
+                # 늦게 도착한 입력 이벤트로 인한 잔류 텍스트 제거
+                qrefs['input'].value = ''
+
+        async def _do_send_qa(q: str):
             qa_chat.append({'role': 'user', 'content': q})
             _show_empty_state(False)
 
@@ -2792,12 +2867,10 @@ def _build_qa_panel(parent, state, create_llm_fn):
         _gate_llm_button(qrefs['send'], native=True)
 
         def _on_enter(_e):
-            try:
-                shift = bool(_e.args.get('shiftKey')) if isinstance(_e.args, dict) else False
-            except Exception:
-                shift = False
-            if not shift:
-                asyncio.create_task(send_qa_message())
+            args = _e.args if isinstance(_e.args, dict) else {}
+            if args.get('shiftKey') or args.get('isComposing'):
+                return  # 줄바꿈 / 한글 IME 조합 중
+            asyncio.create_task(send_qa_message())
         qrefs['input'].on('keydown.enter', _on_enter)
 
         _render_file_list()
@@ -3007,7 +3080,8 @@ def _build_convert_panel(parent, state):
                     except Exception:
                         pass
 
-                _timer = ui.timer(0.4, _poll)
+                # 클라이언트 연결 중에만 폴링 — 변환 중 탭을 닫아도 고아 타이머가 남지 않음
+                _timer = ClientBoundTimer(0.4, _poll, host=log_col)
 
             upload_widget = ui.upload(
                 on_upload=handle_upload, multiple=True, auto_upload=True,

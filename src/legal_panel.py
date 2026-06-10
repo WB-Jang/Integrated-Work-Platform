@@ -243,17 +243,43 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = ""):
                 '{ s.scrollTop = s.scrollHeight; });'
             )
 
+    _search_busy = {'v': False}
+
+    def _set_search_busy(busy: bool):
+        """답변 생성 중 전송 버튼 비활성화 (+ _search_busy 로 중복 전송 차단)."""
+        _search_busy['v'] = busy
+        try:
+            if busy:
+                send_btn.props('disabled')
+                send_btn.classes(add='is-disabled')
+            else:
+                send_btn.props(remove='disabled')
+                send_btn.classes(remove='is-disabled')
+        except Exception:
+            pass
+
     async def do_search(prompt_text: str = None):
         _apply_current_user()
+        if _search_busy['v']:
+            return  # 답변 생성 중 — 추가 전송 차단
         query = (prompt_text if prompt_text is not None else (query_input.value or '')).strip()
         if not query:
             return
         if not config.get("openrouter", {}).get("api_key"):
             ui.notify("config.json에 OpenRouter API 키를 입력해주세요.", type="warning", position='top')
             return
+        _set_search_busy(True)
+        query_input.value = ''
+        try:
+            await _do_search_inner(query)
+        finally:
+            _set_search_busy(False)
+            # 늦게 도착한 입력 이벤트로 인한 잔류 텍스트 제거
+            query_input.value = ''
+
+    async def _do_search_inner(query: str):
         log.info('법률검색 질의: %s', query[:120])
 
-        query_input.value = ''
         _ensure_chat_visible()
         _add_user_bubble(query)
 
@@ -310,10 +336,12 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = ""):
                 )
             b.on('click', lambda _e, p=prompt: asyncio.create_task(do_search(p)))
 
-    # Enter 키 처리 (Shift+Enter는 줄바꿈)
+    # Enter 키 처리 (Shift+Enter 줄바꿈, 한글 IME 조합 중 Enter 무시)
     async def _on_enter(e):
-        if not (isinstance(e.args, dict) and e.args.get('shiftKey')):
-            await do_search()
+        args = e.args if isinstance(e.args, dict) else {}
+        if args.get('shiftKey') or args.get('isComposing'):
+            return
+        await do_search()
 
     query_input.on('keydown.enter', _on_enter)
     send_btn.on('click', lambda _e: asyncio.create_task(do_search()))

@@ -16,6 +16,7 @@ import requests as _requests
 from nicegui import ui, run as nicegui_run, events
 
 from logger import get_logger, set_current_user
+from timer_utils import ClientBoundTimer
 
 log = get_logger("admin")
 
@@ -309,7 +310,8 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
                 rank_btn.on_click(lambda: _do_start('rerank'))
                 rank_stop.on_click(lambda: _do_stop('rerank'))
 
-                ui.timer(10.0, _refresh_server_status)
+                # 클라이언트 연결 중에만 폴링 (disconnect 시 자동 취소·재연결 시 재개)
+                ClientBoundTimer(10.0, _refresh_server_status)
 
                 ui.button(
                     '상태 새로고침', on_click=_refresh_server_status,
@@ -552,7 +554,8 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
                             except Exception:
                                 pass
 
-                _poll_timer_ref[0] = ui.timer(0.8, _poll_build)
+                # 클라이언트 연결 중에만 폴링 (disconnect 시 자동 취소·재연결 시 재개)
+                _poll_timer_ref[0] = ClientBoundTimer(0.8, _poll_build)
 
                 def _confirm_clear():
                     law_name = (law_name_input.value or '').strip().replace(' ', '_')
