@@ -43,6 +43,32 @@ def _smtp_of(recipient) -> str:
     return ""
 
 
+# MAPI 프로퍼티: 마지막으로 수행한 동작(회신/전체회신/전달)과 그 시각.
+# Outlook 목록에서 메일에 보라색 회신 화살표가 붙는 것과 동일한 정보원이다.
+_PR_LAST_VERB_EXECUTED = "http://schemas.microsoft.com/mapi/proptag/0x10810003"
+_PR_LAST_VERB_EXECUTION_TIME = "http://schemas.microsoft.com/mapi/proptag/0x10820040"
+_VERB_LABELS = {102: "회신", 103: "전체회신", 104: "전달"}
+
+
+def _reply_status(item) -> str:
+    """메일의 회신/전달 여부를 반환. 예: '회신 (2026-06-09 14:21)' / '' (없음)."""
+    try:
+        pa = item.PropertyAccessor
+        verb = int(pa.GetProperty(_PR_LAST_VERB_EXECUTED))
+    except Exception:
+        return ""
+    label = _VERB_LABELS.get(verb, "")
+    if not label:
+        return ""
+    try:
+        vt = pa.GetProperty(_PR_LAST_VERB_EXECUTION_TIME)
+        if vt:
+            label += f" ({vt.strftime('%Y-%m-%d %H:%M')})"
+    except Exception:
+        pass
+    return label
+
+
 # ─── Outlook 메일 조회 ───────────────────────────────────────────────────────
 
 def get_emails(
@@ -103,7 +129,11 @@ def get_emails(
                                 continue
 
                         # 수신자 목록: 표시용(이름) + 매칭용(이름·SMTP·주소 모두)
+                        # Recipient.Type 으로 받는사람(1=To)/참조(2=CC)/숨은참조(3=BCC) 구분
                         recipients: list[str] = []
+                        to_list: list[str] = []
+                        cc_list: list[str] = []
+                        bcc_list: list[str] = []
                         recip_match: list[str] = []
                         try:
                             for r in item.Recipients:
@@ -113,6 +143,17 @@ def get_emails(
                                 disp = nm or smtp or addr
                                 if disp:
                                     recipients.append(disp)
+                                    rtype = 1
+                                    try:
+                                        rtype = int(getattr(r, "Type", 1))
+                                    except Exception:
+                                        pass
+                                    if rtype == 2:
+                                        cc_list.append(disp)
+                                    elif rtype == 3:
+                                        bcc_list.append(disp)
+                                    else:
+                                        to_list.append(disp)
                                 recip_match.append(" ".join([nm, smtp, addr]).lower())
                         except Exception:
                             pass
@@ -154,12 +195,26 @@ def get_emails(
                                 except Exception as ae:
                                     log.debug("첨부파일 추출 실패: %s", ae)
 
+                        # Outlook 에서 메일을 직접 열기 위한 식별자
+                        entry_id = getattr(item, "EntryID", "") or ""
+                        try:
+                            store_id = folder.StoreID or ""
+                        except Exception:
+                            store_id = ""
+
                         results.append(
                             {
                                 "subject": subject,
                                 "sender": sender,
                                 "sender_email": sender_email,
                                 "recipients": recipients,
+                                "to": to_list,
+                                "cc": cc_list,
+                                "bcc": bcc_list,
+                                "reply_status": _reply_status(item),
+                                "unread": bool(getattr(item, "UnRead", False)),
+                                "entry_id": entry_id,
+                                "store_id": store_id,
                                 "date": date_str,
                                 "direction": direction,
                                 "body": body,
@@ -184,6 +239,35 @@ def get_emails(
         )
         return results
 
+    finally:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+
+def open_email(entry_id: str, store_id: str = "") -> bool:
+    """EntryID 로 해당 메일을 로컬 Outlook 창에서 바로 연다.
+
+    Returns:
+        True = 열기 성공, False = 항목을 찾지 못함/오류.
+    """
+    if not entry_id:
+        return False
+    pythoncom.CoInitialize()
+    try:
+        import win32com.client
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        ns = outlook.GetNamespace("MAPI")
+        if store_id:
+            item = ns.GetItemFromID(entry_id, store_id)
+        else:
+            item = ns.GetItemFromID(entry_id)
+        item.Display()
+        return True
+    except Exception as e:
+        log.warning("메일 열기 실패 (entry_id=%s...): %s", entry_id[:24], e)
+        return False
     finally:
         try:
             pythoncom.CoUninitialize()
@@ -237,12 +321,17 @@ def format_emails_for_llm(emails: list[dict], max_chars: int = 40_000) -> str:
         if e.get("attachments"):
             att_block = "\n" + "\n".join(e["attachments"])
 
+        to_line = ", ".join((e.get("to") or e.get("recipients") or [])[:5])
+        cc_line = ", ".join((e.get("cc") or [])[:5])
+        reply_line = e.get("reply_status") or ""
         entry = (
             f"--- [{i}] {e['direction']} | {e['date']} ---\n"
             f"제목: {e['subject']}\n"
             f"발신자: {e['sender']} <{e['sender_email']}>\n"
-            f"수신자: {', '.join(e['recipients'][:5])}\n"
-            f"본문:\n{e['body']}{att_block}\n"
+            f"수신자(To): {to_line}\n"
+            + (f"참조(CC): {cc_line}\n" if cc_line else "")
+            + (f"회신여부: {reply_line}\n" if reply_line else "")
+            + f"본문:\n{e['body']}{att_block}\n"
         )
 
         if total + len(entry) > max_chars:
@@ -297,13 +386,23 @@ def analyze_emails(emails: list[dict], task: str, llm) -> str:
     return chain.invoke({"emails": email_text, "task": task})
 
 
-def create_reply_draft(email: dict, instruction: str, llm) -> str:
-    """선택한 메일에 대한 답장 초안을 LLM으로 생성."""
+def create_reply_draft(email: dict, instruction: str, llm, persona_block: str = "") -> str:
+    """선택한 메일에 대한 답장 초안을 LLM으로 생성.
+
+    Args:
+        persona_block: 접속 IP 로 확인된 유저의 COSTAR 페르소나.
+            빈 문자열이면 페르소나 없이 일반 초안 생성 (타인 페르소나 대체 금지).
+    """
     from langchain_core.prompts import PromptTemplate
     from langchain_core.output_parsers import StrOutputParser
 
     template = """[Context]
 당신은 금융기관 임직원의 공식 이메일 답장을 작성하는 어시스턴트입니다.
+
+[작성자(답장을 보내는 사람) 정보]
+{persona}
+※ 작성자 정보가 제공된 경우, 답장 초안의 문체·어조·간결성은 작성자의 평소
+스타일을 따르고, 작성자의 직급·소속에 어울리는 표현을 사용하세요.
 
 [Objective]
 아래 원본 이메일에 대한 답장 초안을 작성하세요.
@@ -312,6 +411,8 @@ def create_reply_draft(email: dict, instruction: str, llm) -> str:
 제목: {subject}
 발신자: {sender}
 날짜: {date}
+수신자(To): {to}
+참조(CC): {cc}
 본문:
 {body}
 
@@ -342,7 +443,10 @@ def create_reply_draft(email: dict, instruction: str, llm) -> str:
             "subject": email.get("subject", ""),
             "sender": email.get("sender", ""),
             "date": email.get("date", ""),
+            "to": ", ".join((email.get("to") or email.get("recipients") or [])[:5]) or "-",
+            "cc": ", ".join((email.get("cc") or [])[:5]) or "-",
             "body": email.get("body", "")[:3000],
             "instruction": instruction,
+            "persona": persona_block.strip() or "(작성자 정보 없음 — 일반 비즈니스 문체로 작성)",
         }
     )

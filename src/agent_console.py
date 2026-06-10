@@ -49,11 +49,14 @@ def _tool_list_legal_db(ctx: dict, args: dict) -> str:
 
 def _tool_search_legal(ctx: dict, args: dict) -> str:
     config = ctx["config"]
+    state = ctx.get("state") or {}
     query = (args.get("query") or "").strip()
     if not query:
         return "[오류] 검색어(query)가 비어 있습니다."
-    from legal_search import LegalSearchAgent
-    agent = LegalSearchAgent(config)
+    # 법률검색 탭과 동일한 유저(IP)별 에이전트를 공유 — 대화 메모리 연속 + 인덱스 재로드 방지
+    from legal_panel import _get_agent
+    agent = _get_agent(config, state.get("client_ip", ""))
+    agent.persona_block = state.get("persona_block", "") or ""
     res = agent.search(query)
     mode = {"vector": "벡터검색", "keyword": "키워드검색", "no_db": "DB없음(일반지식)"}.get(
         res.get("search_mode", ""), res.get("search_mode", "")
@@ -82,7 +85,8 @@ def _tool_convert_pdf(ctx: dict, args: dict) -> str:
     """현재 세션의 'PDF 변환' 업로드 폴더에 있는 파일을 PDF로 일괄 변환."""
     import queue as _queue
     state = ctx.get("state") or {}
-    sess = state.get("session_dir", "anon")
+    # PDF 변환 탭은 접속 시 발급되는 uuid 폴더(pdf_session_dir)를 사용
+    sess = state.get("pdf_session_dir") or state.get("session_dir", "anon")
     base = os.path.join(_BASE_DIR, "uploads", "pdf", sess)
     input_dir = os.path.join(base, "input")
     output_dir = os.path.join(base, "output")

@@ -12,8 +12,14 @@ from typing import Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 BASE_DIR = Path(__file__).parent.parent
+
+# 법령 FAISS 인덱스는 용량이 커서 사용자(에이전트 인스턴스)별로 중복 로드하지 않고
+# faiss_dir 경로 기준으로 프로세스 전역 공유한다. reload 시 dict 를 in-place 로
+# 갱신하므로 이미 생성된 모든 에이전트에 즉시 반영된다.
+_INDEX_CACHE: dict[str, dict] = {}
 
 
 def _make_llm(llm_cfg: dict, openrouter_cfg: dict) -> ChatOpenAI:
@@ -64,14 +70,29 @@ class LegalSearchAgent:
         # 대화 히스토리
         self.history: list = []
 
+        # 유저 페르소나 (COSTAR) — 설정 시 답변 생성 system 프롬프트에 주입.
+        # 반드시 해당 유저(IP)의 페르소나만 set 되어야 한다.
+        self.persona_block: str = ""
+
         self._keyword_llm: Optional[ChatOpenAI] = None
         self._summary_llm: Optional[ChatOpenAI] = None
         self._memory_llm: Optional[ChatOpenAI] = None
 
-    def _load_db(self):
-        """faiss_dir의 모든 *_idx.index 파일을 스캔하여 로드합니다."""
+    def _load_db(self, force: bool = False):
+        """faiss_dir의 모든 *_idx.index 파일을 스캔하여 로드합니다.
+
+        인덱스는 프로세스 전역(_INDEX_CACHE)으로 공유 — 유저별 에이전트가
+        늘어나도 FAISS 메모리는 1벌만 유지된다.
+        """
         faiss_dir = (BASE_DIR / self.db_cfg.get("faiss_dir", "./legal_db")).resolve()
-        self._law_indexes = {}
+        cache_key = str(faiss_dir)
+        cached = _INDEX_CACHE.get(cache_key)
+        if cached is not None and not force:
+            self._law_indexes = cached
+            return
+
+        loaded: dict[str, tuple] = {}
+        self._law_indexes = loaded
 
         if not faiss_dir.exists():
             return
@@ -110,10 +131,18 @@ class LegalSearchAgent:
                 index = faiss_read_index_safe(str(idx_file))
                 with open(store_file, encoding="utf-8") as f:
                     docs = {int(k): v for k, v in json.load(f).items()}
-                self._law_indexes[law_name] = (index, docs)
+                loaded[law_name] = (index, docs)
             except Exception as e:
                 from logger import get_logger
                 get_logger("legal_search").warning("법령 인덱스 로드 실패 (%s): %s", law_name, e)
+
+        # 캐시 커밋 — 기존 캐시가 있으면 in-place 갱신해 공유 참조를 유지한다.
+        if cached is not None:
+            cached.clear()
+            cached.update(loaded)
+            self._law_indexes = cached
+        else:
+            _INDEX_CACHE[cache_key] = loaded
 
     def _get_keyword_llm(self) -> ChatOpenAI:
         if self._keyword_llm is None:
@@ -270,22 +299,31 @@ class LegalSearchAgent:
 3. 실무 유의사항 (있는 경우)
 관련 조항을 찾지 못한 경우: "해당 DB에서 관련 조항을 찾지 못했습니다. 일반 지식으로 답변합니다."라고 먼저 밝히세요."""
 
-        messages = [("system", system_msg)]
+        # 유저 페르소나(COSTAR) — 해당 IP 유저로 확인된 경우에만 set 되어 있음.
+        if self.persona_block:
+            system_msg += "\n\n" + self.persona_block
+
+        # ※ ChatPromptTemplate 을 쓰지 않고 메시지 객체를 직접 구성한다.
+        #   히스토리·법령 원문에 포함된 중괄호({})가 템플릿 변수로 오인되어
+        #   INVALID_PROMPT_INPUT 오류를 일으키는 문제(메모리 압축 요약 직후 발생) 방지.
+        messages = [SystemMessage(content=system_msg)]
 
         for msg in self.history[-12:]:
-            messages.append((msg["role"], msg["content"]))
+            if msg["role"] == "user":
+                messages.append(HumanMessage(content=msg["content"]))
+            else:
+                messages.append(AIMessage(content=msg["content"]))
 
         if no_rag:
             human_content = f"[질문]\n{query}\n\n[참고] 데이터베이스에서 관련 조항을 찾지 못했습니다. 일반 지식으로 답변합니다."
         else:
             human_content = f"[질문]\n{query}\n\n[관련 법률 조항]\n{context}"
 
-        messages.append(("human", human_content))
+        messages.append(HumanMessage(content=human_content))
 
-        prompt = ChatPromptTemplate.from_messages(messages)
-        chain = prompt | self._get_summary_llm() | StrOutputParser()
         try:
-            return chain.invoke({})
+            resp = self._get_summary_llm().invoke(messages)
+            return getattr(resp, "content", None) or str(resp)
         except Exception as e:
             return f"[오류] 답변 생성 실패: {e}"
 
@@ -362,9 +400,12 @@ class LegalSearchAgent:
         return list(self._law_indexes.keys())
 
     def reload_db(self):
-        """DB 파일이 갱신된 후 모든 인덱스를 다시 로드합니다."""
-        self._law_indexes = {}
-        self._load_db()
+        """DB 파일이 갱신된 후 모든 인덱스를 다시 로드합니다.
+
+        전역 캐시를 in-place 갱신하므로, 같은 faiss_dir 을 쓰는 다른 유저의
+        에이전트에도 즉시 반영된다.
+        """
+        self._load_db(force=True)
 
     def clear_history(self):
         self.history.clear()

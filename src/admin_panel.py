@@ -373,7 +373,7 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
                     )
 
                 use_llm_chunk_check = ui.checkbox(
-                    'LLM 의미 단위 청킹 사용 (사이드바에서 선택한 모델)', value=True,
+                    'LLM 의미 단위 청킹 사용 (사이드바에서 선택한 모델)', value=False,
                 )
                 ui.html(
                     '<div class="muted-text" style="margin-bottom:12px;">'

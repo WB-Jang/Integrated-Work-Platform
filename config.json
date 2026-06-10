@@ -110,5 +110,7 @@
   "_comment_ip_user_map": "접속 IP→사용자 이름 매핑 (이니셜 입력 대체, 로그 식별용). 미등록 IP 는 IP 문자열로 기록. HF Spaces/프록시 환경은 X-Forwarded-For 의 첫 IP 사용.",
   "ip_user_map": {
     "127.0.0.1": "로컬테스트"
-  }
+  },
+
+  "_comment_personas": "유저별 페르소나(COSTAR)는 프로젝트 루트의 personas.json 에서 관리합니다. 접속 IP 가 정확히 일치하는 유저에게만 적용되며, 대화 메모리도 IP 기준 유저별로 분리 관리됩니다 (src/persona.py, src/user_memory.py 참고)."
 }

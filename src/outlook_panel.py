@@ -3,6 +3,7 @@ Outlook 메일 분석 패널 UI — 모노크롬 디자인 시스템 이식판
 
 좌측 필터 컬럼 + 우측 탭 (메일 목록 / LLM 분석 / 답장 초안).
 """
+import asyncio
 import datetime
 import html as _html
 import sys
@@ -33,7 +34,7 @@ _OUTLOOK_UNAVAILABLE_MSG = (
 )
 
 
-def build_outlook_panel(config: dict, create_llm_fn):
+def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
     """Outlook 메일 분석 패널.
 
     호출하는 쪽에서 ``.panel`` 컨테이너 안에 배치해 주세요 (page-head 포함).
@@ -41,11 +42,14 @@ def build_outlook_panel(config: dict, create_llm_fn):
     Args:
         config: 앱 설정 dict
         create_llm_fn: create_llm(model_id=...) 함수 참조
+        persona_block: 접속 IP 로 확인된 유저의 COSTAR 페르소나
+            (빈 문자열 = 미적용. 답장 초안 생성 시 작성자 스타일로 반영)
     """
     state = {
         'emails': [],
         'selected_idx': None,
         'model_id': None,
+        'persona_block': persona_block or '',
     }
 
     outlook_ok = _is_outlook_available()
@@ -201,32 +205,61 @@ def build_outlook_panel(config: dict, create_llm_fn):
                 tag_cls = 'tag solid' if direction == '발신' else 'tag'
                 subj = _html.escape(e.get('subject') or '(제목 없음)')
                 sender = _html.escape(e.get('sender') or '')
-                recipients = _html.escape(', '.join(e.get('recipients', [])[:3]))
+                to_list = e.get('to') or e.get('recipients') or []
+                cc_list = e.get('cc') or []
+                to_str = _html.escape(', '.join(to_list[:3]))
                 date_str = e.get('date', '')
+                reply_status = e.get('reply_status') or ''
+
+                # 회신/전달 여부 뱃지 (Outlook PR_LAST_VERB_EXECUTED 기반)
+                reply_chip = ''
+                if reply_status:
+                    reply_chip = (
+                        f'<span class="tag" style="color:#7c3aed;border-color:#c4b5fd;" '
+                        f'title="{_html.escape(reply_status)}">↩ '
+                        f'{_html.escape(reply_status.split(" ")[0])}</span>'
+                    )
+                cc_line = ''
+                if cc_list:
+                    cc_line = (
+                        f'<span style="color:var(--text-4);">참조: '
+                        f'{_html.escape(", ".join(cc_list[:3]))}'
+                        f'{" 외" if len(cc_list) > 3 else ""}</span>'
+                    )
 
                 card = ui.element('div').classes('mail-item')
+                card.props('title="클릭하면 Outlook에서 메일이 열립니다"')
                 with card:
                     ui.html(
                         f'<div class="mail-subject">{subj}</div>'
                         f'<div class="mail-meta">'
                         f'<span class="{tag_cls}">{_html.escape(direction)}</span>'
-                        f'<span>{sender} → {recipients}</span>'
+                        + reply_chip +
+                        f'<span>{sender} → {to_str}</span>'
+                        + cc_line +
                         f'<span style="margin-left:auto;color:var(--text-4);">'
                         f'{_html.escape(date_str)}</span>'
                         f'</div>'
                     )
-                card.on('click', lambda _ev, idx=i: _select_mail(idx))
+                card.on('click', lambda _ev, idx=i: asyncio.create_task(_select_mail(idx)))
 
-    def _select_mail(idx: int):
+    async def _select_mail(idx: int):
         state['selected_idx'] = idx
         e = state['emails'][idx]
         subj = _html.escape(e.get('subject') or '')
         sender = _html.escape(e.get('sender') or '')
+        to_str = _html.escape(', '.join((e.get('to') or e.get('recipients') or [])[:5]))
+        cc_str = _html.escape(', '.join((e.get('cc') or [])[:5]))
+        reply_status = e.get('reply_status') or '회신 이력 없음'
         reply_mail_label.content = (
             '<div class="info-block">'
             f'<b>선택된 메일:</b> {subj}<br>'
             f'<span style="color:var(--text-3);font-size:11.5px;">'
-            f'발신자: {sender} · {_html.escape(e.get("date",""))}</span>'
+            f'발신자: {sender} · {_html.escape(e.get("date",""))}<br>'
+            f'수신자(To): {to_str}'
+            + (f'<br>참조(CC): {cc_str}' if cc_str else '')
+            + f'<br>회신 여부: {_html.escape(reply_status)}'
+            '</span>'
             '</div>'
         )
         # 시각적으로 선택 표시
@@ -238,7 +271,28 @@ def build_outlook_panel(config: dict, create_llm_fn):
                     item.classes(remove='selected')
             except Exception:
                 pass
-        ui.notify(f'선택: {(e.get("subject") or "")[:40]}', position='top')
+
+        # 클릭한 메일을 로컬 Outlook 창에서 바로 열기
+        entry_id = e.get('entry_id') or ''
+        if entry_id:
+            try:
+                from outlook_agent import open_email
+                ok = await nicegui_run.io_bound(
+                    open_email, entry_id, e.get('store_id') or '',
+                )
+                if ok:
+                    ui.notify(
+                        f'Outlook에서 열기: {(e.get("subject") or "")[:40]}',
+                        position='top',
+                    )
+                else:
+                    ui.notify('메일을 여는 데 실패했습니다 (Outlook 연결 확인).',
+                              type='warning', position='top')
+            except Exception as exc:
+                log.warning('메일 열기 오류: %s', exc)
+                ui.notify(f'메일 열기 오류: {exc}', type='warning', position='top')
+        else:
+            ui.notify(f'선택: {(e.get("subject") or "")[:40]}', position='top')
 
     async def run_analysis():
         if not state['emails']:
@@ -296,8 +350,10 @@ def build_outlook_panel(config: dict, create_llm_fn):
         try:
             llm = create_llm_fn(model_id=state.get('model_id'))
             from outlook_agent import create_reply_draft
+            # 유저별 페르소나(COSTAR) — 접속 IP 로 확인된 본인 것만 전달됨
             draft = await nicegui_run.io_bound(
                 create_reply_draft, state['emails'][idx], inst, llm,
+                state.get('persona_block', ''),
             )
             safe = _html.escape(draft).replace('\n', '<br>')
             reply_result.content = (

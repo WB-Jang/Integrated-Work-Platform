@@ -74,6 +74,8 @@ from fss_dashboard_panel import build_fss_dashboard_panel
 from risk_indicator_panel import build_risk_indicator_panel
 from agent_console import build_agent_panel
 import menu_state as _msm
+import user_memory
+from persona import get_persona_block
 from logger import get_logger, set_current_user, register_client_user, unregister_client_user
 
 from ui_styles import inject_global_css   # ← 신규: 모노크롬 디자인 시스템
@@ -746,6 +748,15 @@ def main_page(request: Request):
     _safe_label = re.sub(r'[^0-9A-Za-z가-힣_.-]', '_', str(user_initials)) or 'anon'
     session_dir = f"{_safe_label}_{uuid.uuid4().hex[:8]}"
 
+    # ── 유저(IP)별 메모리 + 페르소나 ────────────────────────────────────────
+    # 대화 메모리는 브라우저 세션이 아니라 유저(고정 IP) 단위로 유지된다.
+    # 페르소나(COSTAR)는 personas.json 에 등록된 IP 와 정확히 일치할 때만 적용.
+    _udata = user_memory.get_user_data(client_ip)
+    home_history: list = _udata.setdefault('home_history', [])
+    persona_block = get_persona_block(client_ip)
+    if persona_block:
+        log.info("페르소나 적용 (ip=%s)", client_ip)
+
     state = {
         'file_path': None,
         'file_name': None,
@@ -755,10 +766,12 @@ def main_page(request: Request):
         'summary_file_name': None,
         'current_tab': 'home',
         'selected_model_id': _DEFAULT_MODEL,
-        'home_history': [],
+        'home_history': home_history,   # 유저(IP)별 공유 리스트 — 재할당 금지
         'llm_open': True,
         'user_initials': user_initials,
         'session_dir': session_dir,
+        'client_ip': client_ip,
+        'persona_block': persona_block,
     }
 
     log.info("페이지 진입 (user=%s, ip=%s, session_dir=%s)",
@@ -956,7 +969,7 @@ def main_page(request: Request):
                     if not msg:
                         return
                     home_input.value = ''
-                    state['home_history'].append({'role': 'user', 'content': msg})
+                    home_history.append({'role': 'user', 'content': msg})
 
                     # 첫 메시지면 empty state 숨기고 채팅 영역 표시
                     empty_state.style('display:none;')
@@ -986,8 +999,11 @@ def main_page(request: Request):
                     try:
                         from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
                         home_llm = create_llm(model_id=state.get('selected_model_id'))
-                        msgs = [SystemMessage(content=_HOME_SYSTEM_PROMPT)]
-                        for h in state['home_history'][-20:]:
+                        _home_sys = _HOME_SYSTEM_PROMPT
+                        if state.get('persona_block'):
+                            _home_sys += '\n\n' + state['persona_block']
+                        msgs = [SystemMessage(content=_home_sys)]
+                        for h in home_history[-20:]:
                             msgs.append(
                                 HumanMessage(content=h['content']) if h['role'] == 'user'
                                 else AIMessage(content=h['content'])
@@ -1029,9 +1045,10 @@ def main_page(request: Request):
                         )
                         reply = f'[오류] {exc}'
 
-                    state['home_history'].append({'role': 'assistant', 'content': reply})
-                    if len(state['home_history']) > 50:
-                        state['home_history'] = state['home_history'][-30:]
+                    home_history.append({'role': 'assistant', 'content': reply})
+                    if len(home_history) > 50:
+                        # 유저별 공유 리스트이므로 재할당 대신 in-place 절단
+                        home_history[:] = home_history[-30:]
 
                     # ui.run_javascript는 slot 컨텍스트 필요 — 명시적으로 진입
                     with chat_inner:
@@ -1059,6 +1076,33 @@ def main_page(request: Request):
 
                 home_input.on('keydown.enter', _home_enter_key)
                 send_btn.on('click', lambda _e: asyncio.create_task(_home_send()))
+
+                # ── 유저(IP)별 메모리 복원 — 재접속 시 이전 홈 대화 표시 ──
+                if home_history:
+                    empty_state.style('display:none;')
+                    scroll_area.style('display:block;')
+                    with chat_inner:
+                        for h in home_history:
+                            if h.get('role') == 'user':
+                                _safe_h = _html.escape(h.get('content', '')).replace('\n', '<br>')
+                                ui.html(
+                                    '<div class="msg user">'
+                                    '<div class="msg-role">'
+                                    '<span class="avatar">나</span><span>사용자</span>'
+                                    '</div>'
+                                    f'<div class="msg-body">{_safe_h}</div>'
+                                    '</div>'
+                                )
+                            else:
+                                _safe_h = _html.escape(h.get('content', '')).replace('\n', '<br>')
+                                ui.html(
+                                    '<div class="msg ai">'
+                                    '<div class="msg-role">'
+                                    '<span class="avatar">AI</span><span>어시스턴트</span>'
+                                    '</div>'
+                                    f'<div class="msg-body">{_safe_h}</div>'
+                                    '</div>'
+                                )
 
         # ── AI 에이전트 콘솔 (PoC) ────────────────────────────────────────
         panel_agent = ui.element('div').classes('panel')
@@ -1156,7 +1200,7 @@ def main_page(request: Request):
                     with ui.element('div').classes('pane-body'):
                         analysis_llm_chunk = ui.checkbox(
                             'LLM 의미 단위 청킹 사용 (OFF: 볼드체 기반)',
-                            value=True,
+                            value=False,
                         ).classes('check-row')
 
                         ui.html(
@@ -1183,11 +1227,17 @@ def main_page(request: Request):
 
                         # ── 결과 탭 (오타 검수 / 논리 검증 / Business Tone&Manner) ──
                         ui.html('<div class="divider" style="margin:12px 0 8px;"></div>')
-                        ui.html(
-                            '<div style="font-size:11px;font-weight:600;color:var(--text-3);'
-                            'letter-spacing:.03em;text-transform:uppercase;margin-bottom:8px;">'
-                            '분석 결과</div>'
-                        )
+                        with ui.element('div').style(
+                            'display:flex;align-items:center;justify-content:space-between;'
+                            'margin-bottom:8px;gap:8px;'
+                        ):
+                            ui.html(
+                                '<div style="font-size:11px;font-weight:600;color:var(--text-3);'
+                                'letter-spacing:.03em;text-transform:uppercase;">분석 결과</div>'
+                            )
+                            btn_download_results = ui.button('결과 다운로드 (DOCX)') \
+                                .classes('btn-primary-mono').props('dense') \
+                                .props('title="선택한 파일의 완료된 분석 결과를 DOCX로 내려받습니다"')
                         with ui.element('div').style(
                             'display:flex;gap:4px;border-bottom:1px solid var(--border);'
                             'margin-bottom:10px;'
@@ -1721,6 +1771,72 @@ def main_page(request: Request):
                        + ') — 좌측 파일을 클릭하면 결과로 전환됩니다.')
                 ui.notify(msg, type='positive', position='top')
 
+            # ── 분석 결과 다운로드 (DOCX) ────────────────────────────────
+            def _build_analysis_docx(fi: dict, out_path: str):
+                """선택 파일의 완료된 분석 결과를 DOCX 보고서로 생성."""
+                import docx as _docx
+                from datetime import datetime as _dtm
+                doc = _docx.Document()
+                doc.add_heading(f'문서 분석 결과 — {fi["name"]}', level=0)
+                doc.add_paragraph(f'생성 일시: {_dtm.now().strftime("%Y-%m-%d %H:%M")}')
+                an = fi.get('analyses') or {}
+                for key, label, _fg, _bg in ANALYSIS_META:
+                    res = an.get(key)
+                    if not res:
+                        continue
+                    doc.add_heading(label, level=1)
+                    sections = res.get('errors') or []
+                    if not sections:
+                        doc.add_paragraph('검출된 수정 사항이 없습니다.')
+                        continue
+                    for sec in sections:
+                        doc.add_heading(sec.get('title', '섹션'), level=2)
+                        errs = sec.get('errors') or []
+                        if not errs:
+                            doc.add_paragraph('수정 사항 없음')
+                            continue
+                        table = doc.add_table(rows=1, cols=3)
+                        table.style = 'Table Grid'
+                        hdr = table.rows[0].cells
+                        hdr[0].text = '원문'
+                        hdr[1].text = '수정 제안'
+                        hdr[2].text = '사유'
+                        for er in errs:
+                            row = table.add_row().cells
+                            row[0].text = str(er.get('error_sentence', ''))
+                            row[1].text = str(er.get('correction', ''))
+                            row[2].text = str(er.get('reason', ''))
+                doc.save(out_path)
+
+            async def download_analysis_results():
+                set_current_user(state.get('user_initials', '-'))
+                if analysis_sel[0] < 0 or analysis_sel[0] >= len(analysis_files):
+                    ui.notify('먼저 좌측 목록에서 파일을 선택하세요.',
+                              type='warning', position='top')
+                    return
+                fi = analysis_files[analysis_sel[0]]
+                if not (fi.get('analyses') or {}):
+                    ui.notify('완료된 분석 결과가 없습니다. 분석을 먼저 실행하세요.',
+                              type='warning', position='top')
+                    return
+                base = os.path.splitext(fi['name'])[0]
+                out_name = f'{base}_분석결과.docx'
+                out_dir = os.path.normpath(os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), '..',
+                    _config.get('upload_dir', './uploads'), 'analysis',
+                    state.get('session_dir', 'anon'),
+                ))
+                os.makedirs(out_dir, exist_ok=True)
+                out_path = os.path.join(out_dir, f'{uuid.uuid4().hex[:8]}_{out_name}')
+                try:
+                    await nicegui_run.io_bound(_build_analysis_docx, fi, out_path)
+                    ui.download(out_path, filename=out_name)
+                    log.info('문서분석 결과 다운로드: %s', out_name)
+                except Exception as exc:
+                    ui.notify(f'다운로드 생성 오류: {exc}', type='negative', position='top')
+
+            btn_download_results.on_click(download_analysis_results)
+
             btn_proof.on_click(lambda: run_analysis('proofreading'))
             btn_style.on_click(lambda: run_analysis('style'))
             btn_logic_single.on_click(lambda: run_analysis('logic'))
@@ -1764,7 +1880,8 @@ def main_page(request: Request):
         panels['legal'] = panel_legal
         panel_legal.style('display:none;')
         with panel_legal:
-            build_legal_panel(_config)
+            # 유저(IP)별 대화 메모리 + 본인 페르소나(COSTAR)만 적용
+            build_legal_panel(_config, user_ip=client_ip, persona_block=persona_block)
 
         # ── 메일 분석 ─────────────────────────────────────────────────────
         panel_outlook = ui.element('div').classes('panel')
@@ -1773,7 +1890,8 @@ def main_page(request: Request):
         with panel_outlook:
             def _llm_outlook(model_id=None):
                 return create_llm(model_id=state.get('selected_model_id'))
-            build_outlook_panel(_config, _llm_outlook)
+            # 답장 초안 생성 시 접속 IP 유저 본인의 페르소나만 적용
+            build_outlook_panel(_config, _llm_outlook, persona_block=persona_block)
 
         # ── 규제 동향 ─────────────────────────────────────────────────────
         panel_regulatory = ui.element('div').classes('panel')
@@ -1961,7 +2079,7 @@ def _build_summary_panel(parent, state):
                     )
                 with ui.element('div').classes('pane-body'):
                     summary_llm_chunk = ui.checkbox(
-                        'LLM 의미 단위 청킹 사용 (문서 요약 전용)', value=True,
+                        'LLM 의미 단위 청킹 사용 (문서 요약 전용)', value=False,
                     ).classes('check-row')
                     ui.html(
                         '<div style="font-size:11px;color:var(--text-4);margin:-4px 0 8px 24px;">'
@@ -2264,7 +2382,11 @@ def _build_qa_panel(parent, state, create_llm_fn):
             )
 
         qa_files: list[dict] = []
-        qa_chat:  list[dict] = []
+        # 대화 히스토리는 세션이 아니라 유저(IP)별로 유지 — 재접속 시 이어짐.
+        # (업로드 파일·청크 인덱스는 세션 단위로 관리되므로 재접속 시 재업로드 필요)
+        qa_chat: list[dict] = user_memory.get_user_data(
+            state.get('client_ip', '')
+        ).setdefault('qa_chat', [])
         qrefs: dict = {}
 
         emb_cfg = _config.get('legal_embedding', {})
@@ -2610,6 +2732,9 @@ def _build_qa_panel(parent, state, create_llm_fn):
                     '문서에 없는 내용은 "주어진 문서로는 확인되지 않습니다"라고 명시하세요. '
                     '답변에는 어느 문서를 근거로 했는지 [문서 N] 형식으로 표기하세요.'
                 )
+                # 접속 IP 로 확인된 유저 본인의 페르소나(COSTAR)만 주입
+                if state.get('persona_block'):
+                    system_prompt += '\n\n' + state['persona_block']
                 user_prompt = (
                     f'[참고 문서]\n{context_text}\n\n'
                     f'[이전 대화]\n{history_block}\n\n'
@@ -2676,15 +2801,20 @@ def _build_qa_panel(parent, state, create_llm_fn):
         qrefs['input'].on('keydown.enter', _on_enter)
 
         _render_file_list()
+        # 유저(IP)별 메모리 복원 — 재접속 시 이전 Q&A 대화 표시
+        _render_chat()
 
 
 def _build_convert_panel(parent, state):
     """PDF 변환 패널 — 모노크롬 카드 1개.
 
-    업로드·변환 폴더는 세션(IP)별로 분리하여 여러 사용자의 파일이 한 폴더에
-    섞이지 않도록 한다: uploads/pdf/<session_dir>/{input,output}.
+    기능 접속(페이지 세션) 시마다 uuid 난수를 발급하여 해당 난수 폴더에서
+    업로드·변환 파일을 관리한다: uploads/pdf/<uuid>/{input,output}.
+    세션 간 업로드 파일과 결과물이 절대 섞이지 않는다.
     """
-    _sess = (state or {}).get('session_dir', 'anon')
+    _sess = uuid.uuid4().hex
+    if state is not None:
+        state['pdf_session_dir'] = _sess   # AI 에이전트 convert_pdf 도구와 공유
     _uploads_root = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), '..', 'uploads', 'pdf', _sess,
     ))

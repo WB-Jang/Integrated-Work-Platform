@@ -22,20 +22,36 @@ def _apply_current_user() -> None:
         v = '-'
     set_current_user(v or '-')
 
-_agent_cache: dict = {}
+def _get_agent(config: dict, user_key: str = "") -> LegalSearchAgent:
+    """유저(접속 IP)별 법률 검색 에이전트를 반환한다.
 
-
-def _get_agent(config: dict) -> LegalSearchAgent:
-    key = id(config)
-    if key not in _agent_cache:
-        _agent_cache[key] = LegalSearchAgent(config)
-    return _agent_cache[key]
+    기존에는 config 단위 전역 캐시여서 **모든 유저가 하나의 대화 메모리를
+    공유**했다. 이제 user_memory 저장소에 유저별로 보관하여, 같은 IP 로
+    재접속하면 본인의 대화 메모리를 그대로 이어받는다.
+    (FAISS 인덱스는 legal_search._INDEX_CACHE 로 전역 공유 — 메모리 중복 없음)
+    """
+    import user_memory
+    store = user_memory.get_user_data(user_key)
+    agent = store.get('legal_agent')
+    if agent is None:
+        agent = LegalSearchAgent(config)
+        store['legal_agent'] = agent
+    return agent
 
 
 def reload_agent_db(config: dict):
-    key = id(config)
-    if key in _agent_cache:
-        _agent_cache[key].reload_db()
+    """DB 재구축 후 인덱스 리로드. 인덱스 캐시는 전역 공유·in-place 갱신이므로
+    아무 에이전트 하나에서 reload 하면 모든 유저 에이전트에 반영된다."""
+    import user_memory
+    agent = None
+    for store in user_memory.all_user_data():
+        a = store.get('legal_agent')
+        if a is not None:
+            agent = a
+            break
+    if agent is None:
+        agent = LegalSearchAgent(config)
+    agent.reload_db()
 
 
 _LEGAL_SUGGESTIONS = [
@@ -54,12 +70,19 @@ _LEGAL_SUGGESTIONS = [
 ]
 
 
-def build_legal_panel(config: dict):
+def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = ""):
     """법률 검색 패널을 현재 NiceGUI 컨텍스트에 추가합니다.
 
     호출하는 쪽에서 ``.panel`` 컨테이너 안에 배치해 주세요.
+
+    Args:
+        config: 앱 설정 dict
+        user_ip: 접속 유저 식별자(IP) — 유저별 대화 메모리 분리에 사용
+        persona_block: 해당 IP 유저의 COSTAR 페르소나 (빈 문자열이면 미적용)
     """
-    agent = _get_agent(config)
+    agent = _get_agent(config, user_ip)
+    # 페르소나는 접속 IP 가 확인된 유저의 것만 주입 (빈 문자열 = 미적용)
+    agent.persona_block = persona_block or ""
 
     # ── 페이지 헤더 ──────────────────────────────────────────────────────
     with ui.element('div').classes('page-head'):
@@ -305,4 +328,28 @@ def build_legal_panel(config: dict):
         ui.notify("대화 초기화 완료", type='info', position='top')
 
     clear_btn.on_click(clear_conversation)
+
+    # ── 유저별 메모리 복원 — 같은 IP 로 재접속 시 이전 대화를 다시 표시 ────
+    if agent.history:
+        _ensure_chat_visible()
+        for m in agent.history:
+            if m.get('role') == 'user':
+                _add_user_bubble(m.get('content', ''))
+            else:
+                safe = _html.escape(m.get('content', '')).replace('\n', '<br>')
+                with chat_inner:
+                    ui.html(
+                        '<div class="msg ai">'
+                        '<div class="msg-role">'
+                        '<span class="avatar">AI</span><span>어시스턴트</span>'
+                        '</div>'
+                        f'<div class="msg-body">{safe}</div>'
+                        '</div>'
+                    )
+        with chat_inner:
+            ui.run_javascript(
+                'document.querySelectorAll(".chat-scroll").forEach(s => '
+                '{ s.scrollTop = s.scrollHeight; });'
+            )
+
     _update_mem_status()
