@@ -67,6 +67,11 @@ fi
 # ── 서버 시작 ─────────────────────────────────────────────
 echo "[3/4] 서버 시작..."
 
+# 이전 실행 잔존 프로세스 정리
+echo "  기존 프로세스 정리 중..."
+fuser -k 8081/tcp 8082/tcp 2>/dev/null || true
+sleep 2
+
 # RunPod에서 외부 접속을 위해 0.0.0.0 바인딩
 export EMBEDDING_HOST="0.0.0.0"
 export RERANK_HOST="0.0.0.0"
