@@ -167,8 +167,31 @@ def _make_chunks(sections: list[dict], source_name: str, chunk_size: int, overla
 
 # ── 임베딩 + 인덱싱 ─────────────────────────────────────────────────────────
 
+def _embed_via_serverless(texts: list[str], batch_size: int = 32, progress_callback=None) -> np.ndarray:
+    """RunPod Serverless 엔드포인트로 배치 임베딩."""
+    import runpod_client
+    vecs = []
+    total = len(texts)
+    for i in range(0, total, batch_size):
+        batch = texts[i:i + batch_size]
+        embs = runpod_client.embed_texts(batch)
+        vecs.extend(embs)
+        if progress_callback:
+            progress_callback(min(i + batch_size, total), total, "Serverless 임베딩 중...")
+    return np.array(vecs, dtype="float32")
+
+
 def _embed_chunks(chunks: list[str], batch_size: int = 16, progress_callback=None) -> np.ndarray:
-    # EMBEDDING_SERVER_URL이 설정된 경우 HTTP 서버(RunPod GPU)를 사용
+    # 1순위: RunPod Serverless
+    try:
+        import runpod_client
+        if runpod_client.serverless_enabled():
+            log.info("RunPod Serverless 임베딩 사용 (%d 청크)", len(chunks))
+            return _embed_via_serverless(chunks, progress_callback=progress_callback)
+    except Exception as e:
+        log.warning("Serverless 임베딩 실패, 다음 방식으로 폴백: %s", e)
+
+    # 2순위: EMBEDDING_SERVER_URL HTTP 서버(원격 Pod)
     remote_url = os.environ.get("EMBEDDING_SERVER_URL", "")
     if remote_url:
         api_key = os.environ.get("INFERENCE_API_KEY", "")

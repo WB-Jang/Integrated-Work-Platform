@@ -1,0 +1,7 @@
+# RunPod Serverless 워커 의존성
+# torch 는 베이스 이미지(runpod/pytorch:2.1.0)에 포함되어 있으므로 설치하지 않는다.
+# PyTorch 2.1 호환을 위해 transformers/sentence-transformers 버전 고정.
+runpod
+transformers==4.44.2
+sentence-transformers==2.7.0
+huggingface_hub

@@ -199,6 +199,19 @@ class LegalSearchAgent:
     # ─── 임베딩 ───────────────────────────────────────────────────
 
     def _embed_text(self, text: str) -> Optional[np.ndarray]:
+        # 1순위: RunPod Serverless
+        try:
+            import runpod_client
+            if runpod_client.serverless_enabled():
+                embs = runpod_client.embed_texts([text])
+                if embs:
+                    v = np.array(embs[0], dtype=np.float32)
+                    v /= np.linalg.norm(v) + 1e-12
+                    return v
+        except Exception:
+            pass
+
+        # 2순위: HTTP 임베딩 서버 (로컬/원격 Pod)
         url = os.environ.get("EMBEDDING_SERVER_URL") or self.emb_cfg.get("url", "http://127.0.0.1:8081")
         model = self.emb_cfg.get("model", "bge-m3")
         timeout = self.emb_cfg.get("timeout", 45)
@@ -264,6 +277,18 @@ class LegalSearchAgent:
     def _rerank(self, query: str, candidates: list[str], top_k: int) -> list[str]:
         if not candidates:
             return []
+
+        # 1순위: RunPod Serverless
+        try:
+            import runpod_client
+            if runpod_client.serverless_enabled():
+                results = runpod_client.rerank(query, candidates)
+                if results:
+                    return [item["text"] for item in results[:top_k]]
+        except Exception:
+            pass
+
+        # 2순위: HTTP 리랭크 서버 (로컬/원격 Pod)
         rerank_url = os.environ.get("RERANK_SERVER_URL") or self.rerank_cfg.get("url", "http://127.0.0.1:8082/rerank")
         timeout = self.rerank_cfg.get("timeout", 30)
         headers = _inference_auth_headers()
