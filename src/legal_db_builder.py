@@ -34,6 +34,28 @@ def _get_embed_model():
     return _emb_model
 
 
+def _embed_via_http(texts: list[str], url: str, api_key: str = "") -> np.ndarray:
+    """HTTP 임베딩 서버(RunPod 등)를 통해 배치 임베딩을 수행합니다."""
+    import requests
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    vecs = []
+    # 서버는 텍스트 배열을 한 번에 받을 수 있지만 메모리 안전을 위해 16개씩 분할
+    batch_size = 16
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        r = requests.post(
+            f"{url}/v1/embeddings",
+            json={"model": "bge-m3", "input": batch},
+            headers=headers,
+            timeout=120,
+        )
+        r.raise_for_status()
+        data = r.json()["data"]
+        data.sort(key=lambda x: x["index"])
+        vecs.extend([d["embedding"] for d in data])
+    return np.array(vecs, dtype="float32")
+
+
 # ── FAISS Unicode-경로 안전 래퍼 ─────────────────────────────────────────────
 # faiss의 C++ I/O는 Windows에서 fopen(const char*)을 사용하므로
 # 한글 등 비-ASCII 파일명이 ANSI 코드페이지와 mismatch되어 실패함.
@@ -146,6 +168,18 @@ def _make_chunks(sections: list[dict], source_name: str, chunk_size: int, overla
 # ── 임베딩 + 인덱싱 ─────────────────────────────────────────────────────────
 
 def _embed_chunks(chunks: list[str], batch_size: int = 16, progress_callback=None) -> np.ndarray:
+    # EMBEDDING_SERVER_URL이 설정된 경우 HTTP 서버(RunPod GPU)를 사용
+    remote_url = os.environ.get("EMBEDDING_SERVER_URL", "")
+    if remote_url:
+        api_key = os.environ.get("INFERENCE_API_KEY", "")
+        log.info("HTTP 임베딩 서버 사용: %s (%d 청크)", remote_url, len(chunks))
+        if progress_callback:
+            progress_callback(0, len(chunks), "HTTP 임베딩 서버로 임베딩 중...")
+        vecs = _embed_via_http(chunks, remote_url, api_key)
+        if progress_callback:
+            progress_callback(len(chunks), len(chunks), "임베딩 완료")
+        return vecs
+
     model = _get_embed_model()
     all_vecs = []
     total = len(chunks)

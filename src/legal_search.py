@@ -16,6 +16,13 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 BASE_DIR = Path(__file__).parent.parent
 
+
+def _inference_auth_headers() -> dict:
+    """INFERENCE_API_KEY 환경변수가 설정된 경우 Authorization 헤더를 반환합니다."""
+    key = os.environ.get("INFERENCE_API_KEY", "")
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
 # 법령 FAISS 인덱스는 용량이 커서 사용자(에이전트 인스턴스)별로 중복 로드하지 않고
 # faiss_dir 경로 기준으로 프로세스 전역 공유한다. reload 시 dict 를 in-place 로
 # 갱신하므로 이미 생성된 모든 에이전트에 즉시 반영된다.
@@ -192,13 +199,15 @@ class LegalSearchAgent:
     # ─── 임베딩 ───────────────────────────────────────────────────
 
     def _embed_text(self, text: str) -> Optional[np.ndarray]:
-        url = self.emb_cfg.get("url", "http://127.0.0.1:8081")
+        url = os.environ.get("EMBEDDING_SERVER_URL") or self.emb_cfg.get("url", "http://127.0.0.1:8081")
         model = self.emb_cfg.get("model", "bge-m3")
         timeout = self.emb_cfg.get("timeout", 45)
+        headers = _inference_auth_headers()
         try:
             r = requests.post(
                 f"{url}/v1/embeddings",
                 json={"model": model, "input": text},
+                headers=headers,
                 timeout=timeout,
             )
             if r.ok and "data" in r.json():
@@ -255,12 +264,14 @@ class LegalSearchAgent:
     def _rerank(self, query: str, candidates: list[str], top_k: int) -> list[str]:
         if not candidates:
             return []
-        rerank_url = self.rerank_cfg.get("url", "http://127.0.0.1:8082/rerank")
+        rerank_url = os.environ.get("RERANK_SERVER_URL") or self.rerank_cfg.get("url", "http://127.0.0.1:8082/rerank")
         timeout = self.rerank_cfg.get("timeout", 30)
+        headers = _inference_auth_headers()
         try:
             r = requests.post(
                 rerank_url,
                 json={"query": query, "candidates": candidates},
+                headers=headers,
                 timeout=timeout,
             )
             if r.ok:
