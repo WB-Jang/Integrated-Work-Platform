@@ -123,7 +123,17 @@ echo "  INFERENCE_API_KEY    = (위에서 설정한 키)"
 echo ""
 
 # 프로세스 종료 시 자식 프로세스도 정리
-trap "kill ${EMB_PID} ${RERANK_PID} 2>/dev/null" EXIT
+cleanup() {
+    echo "[shutdown] 서버 종료 중..."
+    kill "${EMB_PID}" "${RERANK_PID}" 2>/dev/null || true
+    wait "${EMB_PID}" "${RERANK_PID}" 2>/dev/null || true
+    exit 0
+}
+trap cleanup TERM INT EXIT
 
-# 두 서버 중 하나라도 종료되면 스크립트 종료
-wait -n ${EMB_PID} ${RERANK_PID}
+# 두 서버를 계속 감시 (둘 다 살아있는 동안 유지)
+while kill -0 "${EMB_PID}" 2>/dev/null && kill -0 "${RERANK_PID}" 2>/dev/null; do
+    sleep 10
+done
+
+echo "[경고] 서버 중 하나가 종료됨. 재시작이 필요합니다."
