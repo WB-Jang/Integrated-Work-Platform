@@ -67,9 +67,13 @@ fi
 # ── 서버 시작 ─────────────────────────────────────────────
 echo "[3/4] 서버 시작..."
 
+# 포트 설정 (RunPod 시스템 nginx가 8081/8001/9091/7861/3001 을 점유하므로 피한다)
+EMBED_PORT="${EMBED_PORT:-8083}"
+RERANK_PORT="${RERANK_PORT:-8082}"
+
 # 이전 실행 잔존 프로세스 정리
 echo "  기존 프로세스 정리 중..."
-fuser -k 8081/tcp 8082/tcp 2>/dev/null || true
+fuser -k ${EMBED_PORT}/tcp ${RERANK_PORT}/tcp 2>/dev/null || true
 sleep 2
 
 # RunPod에서 외부 접속을 위해 0.0.0.0 바인딩
@@ -85,21 +89,21 @@ fi
 cd "${SCRIPT_DIR}"
 
 # 임베딩 서버 백그라운드 실행
-python "${SRC_DIR}/embedding_server.py" 8081 &
+python "${SRC_DIR}/embedding_server.py" ${EMBED_PORT} &
 EMB_PID=$!
-echo "  임베딩 서버 PID: ${EMB_PID} (포트 8081)"
+echo "  임베딩 서버 PID: ${EMB_PID} (포트 ${EMBED_PORT})"
 
 # 리랭크 서버 백그라운드 실행
-python "${SRC_DIR}/rerank_server.py" 8082 &
+python "${SRC_DIR}/rerank_server.py" ${RERANK_PORT} &
 RERANK_PID=$!
-echo "  리랭크 서버 PID: ${RERANK_PID} (포트 8082)"
+echo "  리랭크 서버 PID: ${RERANK_PID} (포트 ${RERANK_PORT})"
 
 # ── 헬스체크 ──────────────────────────────────────────────
 echo "[4/4] 서버 준비 대기 중..."
 MAX_WAIT=180
 WAITED=0
 
-for PORT in 8081 8082; do
+for PORT in ${EMBED_PORT} ${RERANK_PORT}; do
     while true; do
         if curl -sf "http://localhost:${PORT}/health" > /dev/null 2>&1; then
             echo "  ✅ 포트 ${PORT} 준비 완료"
@@ -118,12 +122,12 @@ done
 echo ""
 echo "=== 서버 준비 완료 ==="
 echo "RunPod 콘솔에서 아래 포트의 Public URL을 확인하세요:"
-echo "  임베딩: 포트 8081  → EMBEDDING_SERVER_URL"
-echo "  리랭크: 포트 8082  → RERANK_SERVER_URL  (URL 끝에 /rerank 추가)"
+echo "  임베딩: 포트 ${EMBED_PORT}  → EMBEDDING_SERVER_URL"
+echo "  리랭크: 포트 ${RERANK_PORT}  → RERANK_SERVER_URL  (URL 끝에 /rerank 추가)"
 echo ""
 echo "HuggingFace Space Secrets에 설정할 값:"
-echo "  EMBEDDING_SERVER_URL = https://<pod-id>-8081.proxy.runpod.net"
-echo "  RERANK_SERVER_URL    = https://<pod-id>-8082.proxy.runpod.net/rerank"
+echo "  EMBEDDING_SERVER_URL = https://<pod-id>-${EMBED_PORT}.proxy.runpod.net"
+echo "  RERANK_SERVER_URL    = https://<pod-id>-${RERANK_PORT}.proxy.runpod.net/rerank"
 echo "  INFERENCE_API_KEY    = (위에서 설정한 키)"
 echo ""
 
