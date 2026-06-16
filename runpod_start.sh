@@ -21,8 +21,11 @@ echo "작업 디렉토리: ${SCRIPT_DIR}"
 
 # ── 의존성 설치 ────────────────────────────────────────────
 echo "[1/4] pip 패키지 설치 중..."
+# transformers 4.44.x 까지는 PyTorch 2.1과 호환됨
+# sentence-transformers 2.7.0은 transformers<5.0 범위 내에서 동작
 pip install -q \
-    sentence-transformers \
+    "transformers==4.44.2" \
+    "sentence-transformers==2.7.0" \
     fastapi \
     uvicorn \
     numpy
