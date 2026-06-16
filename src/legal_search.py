@@ -74,6 +74,21 @@ class LegalSearchAgent:
         self._law_indexes: dict[str, tuple] = {}
         self._load_db()
 
+        # 백엔드 진단 로그 (Serverless 활성 여부 / 인덱스 로드 개수)
+        try:
+            from logger import get_logger as _gl
+            import runpod_client
+            _gl("legal_search").info(
+                "LegalSearchAgent init: serverless=%s, endpoint_id_set=%s, api_key_set=%s, 인덱스=%d개",
+                runpod_client.serverless_enabled(),
+                bool(os.environ.get("RUNPOD_ENDPOINT_ID")),
+                bool(os.environ.get("RUNPOD_API_KEY")),
+                len(self._law_indexes),
+            )
+        except Exception as _e:
+            from logger import get_logger as _gl
+            _gl("legal_search").warning("백엔드 진단 로그 실패: %s", _e)
+
         # 대화 히스토리
         self.history: list = []
 
@@ -199,17 +214,23 @@ class LegalSearchAgent:
     # ─── 임베딩 ───────────────────────────────────────────────────
 
     def _embed_text(self, text: str) -> Optional[np.ndarray]:
+        from logger import get_logger as _gl
+        _log = _gl("legal_search")
         # 1순위: RunPod Serverless
         try:
             import runpod_client
             if runpod_client.serverless_enabled():
+                _log.info("임베딩: RunPod Serverless 호출")
                 embs = runpod_client.embed_texts([text])
                 if embs:
                     v = np.array(embs[0], dtype=np.float32)
                     v /= np.linalg.norm(v) + 1e-12
                     return v
-        except Exception:
-            pass
+                _log.warning("Serverless 임베딩 응답이 비어있음")
+            else:
+                _log.info("임베딩: Serverless 비활성(env 미설정) → HTTP 폴백")
+        except Exception as e:
+            _log.warning("Serverless 임베딩 실패 → HTTP 폴백: %s", e)
 
         # 2순위: HTTP 임베딩 서버 (로컬/원격 Pod)
         url = os.environ.get("EMBEDDING_SERVER_URL") or self.emb_cfg.get("url", "http://127.0.0.1:8081")

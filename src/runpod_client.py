@@ -13,17 +13,24 @@ import time
 import requests
 
 
+def _endpoint_id() -> str:
+    return os.environ.get("RUNPOD_ENDPOINT_ID", "").strip()
+
+
+def _api_key() -> str:
+    return os.environ.get("RUNPOD_API_KEY", "").strip()
+
+
 def serverless_enabled() -> bool:
-    return bool(os.environ.get("RUNPOD_ENDPOINT_ID") and os.environ.get("RUNPOD_API_KEY"))
+    return bool(_endpoint_id() and _api_key())
 
 
 def _base_url() -> str:
-    eid = os.environ.get("RUNPOD_ENDPOINT_ID", "")
-    return f"https://api.runpod.ai/v2/{eid}"
+    return f"https://api.runpod.ai/v2/{_endpoint_id()}"
 
 
 def _headers() -> dict:
-    return {"Authorization": f"Bearer {os.environ.get('RUNPOD_API_KEY', '')}"}
+    return {"Authorization": f"Bearer {_api_key()}"}
 
 
 def _call(payload: dict, timeout: int = 180) -> dict:
