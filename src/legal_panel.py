@@ -70,7 +70,8 @@ _LEGAL_SUGGESTIONS = [
 ]
 
 
-def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = ""):
+def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
+                      model_getter=None):
     """법률 검색 패널을 현재 NiceGUI 컨텍스트에 추가합니다.
 
     호출하는 쪽에서 ``.panel`` 컨테이너 안에 배치해 주세요.
@@ -79,10 +80,24 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = ""):
         config: 앱 설정 dict
         user_ip: 접속 유저 식별자(IP) — 유저별 대화 메모리 분리에 사용
         persona_block: 해당 IP 유저의 COSTAR 페르소나 (빈 문자열이면 미적용)
+        model_getter: () -> (provider, model) 콜백. 사이드바에서 선택한 모델을
+            반환한다. 검색 직전 호출되어 에이전트 LLM 모델을 동기화한다.
+            None 이면 config 의 legal_*_llm 기본 모델을 사용.
     """
     agent = _get_agent(config, user_ip)
     # 페르소나는 접속 IP 가 확인된 유저의 것만 주입 (빈 문자열 = 미적용)
     agent.persona_block = persona_block or ""
+
+    def _sync_model():
+        """검색 직전 사이드바 선택 모델을 에이전트에 적용 (하드코딩 방지)."""
+        if not model_getter:
+            return
+        try:
+            prov, mdl = model_getter()
+            if mdl:
+                agent.set_model(prov, mdl)
+        except Exception as e:
+            log.warning("법률검색 모델 동기화 실패: %s", e)
 
     # ── 페이지 헤더 ──────────────────────────────────────────────────────
     with ui.element('div').classes('page-head'):
@@ -279,6 +294,9 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = ""):
 
     async def _do_search_inner(query: str):
         log.info('법률검색 질의: %s', query[:120])
+
+        # 사이드바에서 선택한 모델을 에이전트에 동기화 (검색마다 최신 선택 반영)
+        _sync_model()
 
         _ensure_chat_visible()
         _add_user_bubble(query)

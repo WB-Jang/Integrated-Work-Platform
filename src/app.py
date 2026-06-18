@@ -1930,7 +1930,11 @@ def main_page(request: Request):
         panel_legal.style('display:none;')
         with panel_legal:
             # 유저(IP)별 대화 메모리 + 본인 페르소나(COSTAR)만 적용
-            build_legal_panel(_config, user_ip=client_ip, persona_block=persona_block)
+            def _legal_model():
+                mid = state.get('selected_model_id')
+                return resolve_chunk_model(mid) if mid else (None, None)
+            build_legal_panel(_config, user_ip=client_ip, persona_block=persona_block,
+                              model_getter=_legal_model)
 
         # ── 메일 분석 ─────────────────────────────────────────────────────
         panel_outlook = ui.element('div').classes('panel')
@@ -2366,29 +2370,66 @@ def _qa_simple_chunk(text: str, chunk_size: int = 1200, overlap: int = 200) -> l
     return out
 
 
-def _qa_embed_text(emb_cfg: dict, text: str):
-    """legal_embedding 서버를 재사용해 단일 텍스트 임베딩을 얻음. 실패 시 None."""
+def _qa_embed_batch(emb_cfg: dict, texts: list[str]) -> list:
+    """텍스트 배치 임베딩. 각 원소는 정규화된 np.ndarray 또는 None(실패).
+
+    우선순위:
+      1) RunPod Serverless (RUNPOD_ENDPOINT_ID/RUNPOD_API_KEY 설정 시)
+      2) HTTP 임베딩 서버(legal_embedding.url, 기본 로컬 127.0.0.1:8081)
+    둘 다 실패하면 [None, ...] 을 반환 → 상위에서 TF-IDF 키워드 검색으로 폴백.
+    """
+    if not texts:
+        return []
     try:
-        import requests
         import numpy as np
     except Exception:
-        return None
-    url = emb_cfg.get('url', 'http://127.0.0.1:8081')
-    model = emb_cfg.get('model', 'bge-m3')
-    timeout = emb_cfg.get('timeout', 30)
+        return [None] * len(texts)
+
+    def _normalize(raw_vecs) -> list:
+        out = []
+        for e in raw_vecs:
+            v = np.array(e, dtype=np.float32)
+            n = np.linalg.norm(v)
+            out.append(v / (n + 1e-12) if n else v)
+        return out
+
+    # 1순위: RunPod Serverless
     try:
+        import runpod_client
+        if runpod_client.serverless_enabled():
+            embs = runpod_client.embed_texts(texts)
+            if embs and len(embs) == len(texts):
+                return _normalize(embs)
+            log.warning("Q&A Serverless 임베딩 개수 불일치(%d/%d) → HTTP 폴백",
+                        len(embs or []), len(texts))
+    except Exception as e:
+        log.warning("Q&A Serverless 임베딩 실패, HTTP 폴백: %s", e)
+
+    # 2순위: HTTP 임베딩 서버 (배치 요청)
+    try:
+        import requests
+        url = emb_cfg.get('url', 'http://127.0.0.1:8081')
+        model = emb_cfg.get('model', 'bge-m3')
+        timeout = emb_cfg.get('timeout', 60)
         r = requests.post(
             f"{url}/v1/embeddings",
-            json={"model": model, "input": text},
+            json={"model": model, "input": texts},
             timeout=timeout,
         )
-        if r.ok and "data" in r.json():
-            v = np.array(r.json()["data"][0]["embedding"], dtype=np.float32)
-            v /= (np.linalg.norm(v) + 1e-12)
-            return v
-    except Exception:
-        pass
-    return None
+        if r.ok:
+            data = sorted(r.json().get("data", []), key=lambda x: x.get("index", 0))
+            if len(data) == len(texts):
+                return _normalize([d["embedding"] for d in data])
+    except Exception as e:
+        log.warning("Q&A HTTP 배치 임베딩 실패: %s", e)
+
+    return [None] * len(texts)
+
+
+def _qa_embed_text(emb_cfg: dict, text: str):
+    """단일 텍스트 임베딩 (RunPod Serverless 우선). 실패 시 None."""
+    out = _qa_embed_batch(emb_cfg, [text])
+    return out[0] if out else None
 
 
 def _qa_score_tfidf(query: str, chunks: list[str]) -> list[float]:
@@ -2669,16 +2710,11 @@ def _build_qa_panel(parent, state, create_llm_fn):
                     f'[{_html.escape(name)}] 인덱싱 중… '
                     f'(청크 {len(chunks)}개)</div>'
                 )
-                vectors = []
-                use_embed = True
-                for ci, ch in enumerate(chunks):
-                    if not use_embed:
-                        vectors.append(None)
-                        continue
-                    v = await nicegui_run.io_bound(_qa_embed_text, emb_cfg, ch)
-                    if v is None and ci == 0:
-                        use_embed = False
-                    vectors.append(v)
+                # 청크 전체를 한 번에 배치 임베딩 (RunPod Serverless 우선).
+                # 청크별 개별 호출은 Serverless 콜드스타트/요청 비용을 N배로 키우므로
+                # 단일 배치 호출로 묶는다.
+                vectors = await nicegui_run.io_bound(_qa_embed_batch, emb_cfg, chunks)
+                use_embed = any(v is not None for v in vectors)
 
                 size_kb = len(data) / 1024
                 qa_files.append({
@@ -2702,6 +2738,36 @@ def _build_qa_panel(parent, state, create_llm_fn):
 
         qrefs['upload'].on_upload(handle_qa_upload)
 
+        def _qa_rerank(query: str, candidates: list[tuple[str, str, float]]):
+            """1차 후보를 RunPod Serverless 리랭커(BGE-Reranker)로 재정렬.
+
+            Serverless 미설정/실패 시 입력 순서를 그대로 반환(임베딩 점수 순위 유지).
+            handler 응답: {"results": [{"text","score"}, ...]} (score 내림차순).
+            """
+            try:
+                import runpod_client
+                if not runpod_client.serverless_enabled() or not candidates:
+                    return candidates
+                cand_texts = [c[1] for c in candidates]
+                results = runpod_client.rerank(query, cand_texts)
+                if not results:
+                    return candidates
+                # text → 입력 (name, chunk) 매핑. 동일 청크 중복 대비 큐로 소진.
+                from collections import defaultdict, deque
+                bucket: dict = defaultdict(deque)
+                for name, ch, _ in candidates:
+                    bucket[ch].append(name)
+                reranked: list[tuple[str, str, float]] = []
+                for r in results:
+                    t = r.get("text", "")
+                    sc = float(r.get("score", 0.0))
+                    if bucket.get(t):
+                        reranked.append((bucket[t].popleft(), t, sc))
+                return reranked or candidates
+            except Exception as e:
+                log.warning("Q&A 리랭킹 실패, 임베딩 순위 유지: %s", e)
+                return candidates
+
         def _retrieve(query: str, top_k: int = 6) -> list[tuple[str, str, float]]:
             all_items: list[tuple[str, str, object]] = []
             for fi in qa_files:
@@ -2712,28 +2778,44 @@ def _build_qa_panel(parent, state, create_llm_fn):
             if not all_items:
                 return []
 
+            # 리랭킹이 가능하면 1차 후보를 더 넓게 뽑아 리랭커가 고를 폭을 확보.
+            try:
+                import runpod_client
+                rerank_on = runpod_client.serverless_enabled()
+            except Exception:
+                rerank_on = False
+            prelim_k = max(top_k * 3, top_k) if rerank_on else top_k
+
+            candidates: list[tuple[str, str, float]] | None = None
             if all(v is not None for _, _, v in all_items):
                 try:
                     import numpy as np
                     qv = _qa_embed_text(emb_cfg, query)
                     if qv is not None:
-                        scored = []
-                        for name, ch, v in all_items:
-                            s = float(np.dot(qv, v))
-                            scored.append((name, ch, s))
+                        scored = [
+                            (name, ch, float(np.dot(qv, v)))
+                            for name, ch, v in all_items
+                        ]
                         scored.sort(key=lambda x: x[2], reverse=True)
-                        return scored[:top_k]
+                        candidates = scored[:prelim_k]
                 except Exception:
                     pass
 
-            texts = [ch for _, ch, _ in all_items]
-            scores = _qa_score_tfidf(query, texts)
-            scored = [
-                (all_items[i][0], all_items[i][1], float(scores[i]))
-                for i in range(len(all_items))
-            ]
-            scored.sort(key=lambda x: x[2], reverse=True)
-            return scored[:top_k]
+            if candidates is None:
+                texts = [ch for _, ch, _ in all_items]
+                scores = _qa_score_tfidf(query, texts)
+                scored = [
+                    (all_items[i][0], all_items[i][1], float(scores[i]))
+                    for i in range(len(all_items))
+                ]
+                scored.sort(key=lambda x: x[2], reverse=True)
+                candidates = scored[:prelim_k]
+
+            # 2차: RunPod Serverless 리랭킹 (가능 시)
+            if rerank_on:
+                candidates = _qa_rerank(query, candidates)
+
+            return candidates[:top_k]
 
         def _format_context(docs: list[tuple[str, str, float]]) -> str:
             blocks = []

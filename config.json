@@ -105,7 +105,7 @@
   "upload_dir": "./uploads",
 
   "_comment_regulatory": "규제 동향 수집 설정. fss_api_key: 금융감독원 Open API 키 (없으면 FSS 수집 생략)",
-  "fss_api_key": "",
+  "fss_api_key": "608eaf8e1a26e0cf2f0b14fc35a4170c",
 
   "_comment_ip_user_map": "접속 IP→사용자 이름 매핑 (이니셜 입력 대체, 로그 식별용). 미등록 IP 는 IP 문자열로 기록. HF Spaces/프록시 환경은 X-Forwarded-For 의 첫 IP 사용.",
   "ip_user_map": {

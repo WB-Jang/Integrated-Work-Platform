@@ -29,27 +29,51 @@ def _inference_auth_headers() -> dict:
 _INDEX_CACHE: dict[str, dict] = {}
 
 
-def _make_llm(llm_cfg: dict, openrouter_cfg: dict) -> ChatOpenAI:
-    provider = llm_cfg.get("provider", "openrouter")
-    if provider == "openrouter":
+def _make_llm(
+    llm_cfg: dict,
+    openrouter_cfg: dict,
+    openai_cfg: dict | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+) -> ChatOpenAI:
+    """법률검색용 LLM 빌더.
+
+    model/provider 가 주어지면(=UI 모델 선택 창에서 고른 값) 그것으로 override 하고,
+    temperature·max_tokens 등 역할별 세부 설정은 llm_cfg(legal_*_llm)를 그대로 유지한다.
+    하드코딩을 피하고 사용자가 사이드바에서 선택한 모델을 일관되게 사용하기 위함.
+    """
+    prov = (provider or llm_cfg.get("provider", "openrouter")).lower()
+    mdl = model or llm_cfg["model"]
+    openai_cfg = openai_cfg or {}
+
+    if prov == "openai":
+        return ChatOpenAI(
+            base_url=openai_cfg.get("base_url", "https://api.openai.com/v1"),
+            api_key=openai_cfg.get("api_key", "") or os.environ.get("OPENAI_API_KEY", ""),
+            model=mdl,
+            temperature=llm_cfg.get("temperature", 0),
+            max_tokens=llm_cfg.get("max_tokens", 4096),
+            max_retries=1,
+        )
+    if prov == "openrouter":
         return ChatOpenAI(
             base_url=openrouter_cfg["base_url"],
             api_key=openrouter_cfg["api_key"],
-            model=llm_cfg["model"],
+            model=mdl,
             temperature=llm_cfg.get("temperature", 0.7),
             max_tokens=llm_cfg.get("max_tokens", 4096),
             max_retries=1,
         )
-    else:
-        return ChatOpenAI(
-            base_url=llm_cfg["base_url"],
-            api_key=llm_cfg.get("api_key", "not-needed"),
-            model=llm_cfg["model"],
-            temperature=llm_cfg.get("temperature", 0),
-            max_tokens=llm_cfg.get("max_tokens", 4096),
-            timeout=llm_cfg.get("timeout", 120),
-            max_retries=0,
-        )
+    # local (llama-server 등)
+    return ChatOpenAI(
+        base_url=llm_cfg.get("base_url", "http://localhost:8080/v1"),
+        api_key=llm_cfg.get("api_key", "not-needed"),
+        model=mdl,
+        temperature=llm_cfg.get("temperature", 0),
+        max_tokens=llm_cfg.get("max_tokens", 4096),
+        timeout=llm_cfg.get("timeout", 120),
+        max_retries=0,
+    )
 
 
 class LegalSearchAgent:
@@ -99,6 +123,30 @@ class LegalSearchAgent:
         self._keyword_llm: Optional[ChatOpenAI] = None
         self._summary_llm: Optional[ChatOpenAI] = None
         self._memory_llm: Optional[ChatOpenAI] = None
+
+        # UI(사이드바)에서 선택한 모델 — (provider, model). set_model()로 갱신.
+        # None 이면 config 의 legal_*_llm 기본 모델을 사용한다.
+        self._ui_model: Optional[tuple[str, str]] = None
+
+    def set_model(self, provider: str, model: str) -> None:
+        """UI에서 선택한 모델로 키워드/요약/메모리 LLM을 교체한다.
+
+        모델이 실제로 바뀐 경우에만 캐시된 LLM 인스턴스를 무효화하여
+        다음 호출 시 새 모델로 재생성되게 한다(매 검색마다 재생성 방지).
+        """
+        if not model:
+            return
+        key = (provider or "", model)
+        if self._ui_model == key:
+            return
+        self._ui_model = key
+        self._keyword_llm = None
+        self._summary_llm = None
+        self._memory_llm = None
+        from logger import get_logger as _gl
+        _gl("legal_search").info(
+            "법률검색 LLM 모델 변경: provider=%s, model=%s", provider, model
+        )
 
     def _load_db(self, force: bool = False):
         """faiss_dir의 모든 *_idx.index 파일을 스캔하여 로드합니다.
@@ -166,24 +214,34 @@ class LegalSearchAgent:
         else:
             _INDEX_CACHE[cache_key] = loaded
 
+    def _ui_model_args(self) -> tuple[str | None, str | None]:
+        """현재 UI 선택 모델을 (provider, model) 로 반환. 미선택 시 (None, None)."""
+        return self._ui_model if self._ui_model else (None, None)
+
     def _get_keyword_llm(self) -> ChatOpenAI:
         if self._keyword_llm is None:
+            prov, mdl = self._ui_model_args()
             self._keyword_llm = _make_llm(
-                self.config.get("legal_keyword_llm", {}), self.openrouter
+                self.config.get("legal_keyword_llm", {}), self.openrouter,
+                self.config.get("openai", {}), model=mdl, provider=prov,
             )
         return self._keyword_llm
 
     def _get_summary_llm(self) -> ChatOpenAI:
         if self._summary_llm is None:
+            prov, mdl = self._ui_model_args()
             self._summary_llm = _make_llm(
-                self.config.get("legal_summary_llm", {}), self.openrouter
+                self.config.get("legal_summary_llm", {}), self.openrouter,
+                self.config.get("openai", {}), model=mdl, provider=prov,
             )
         return self._summary_llm
 
     def _get_memory_llm(self) -> ChatOpenAI:
         if self._memory_llm is None:
+            prov, mdl = self._ui_model_args()
             self._memory_llm = _make_llm(
-                self.config.get("legal_memory_llm", {}), self.openrouter
+                self.config.get("legal_memory_llm", {}), self.openrouter,
+                self.config.get("openai", {}), model=mdl, provider=prov,
             )
         return self._memory_llm
 
