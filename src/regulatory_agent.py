@@ -2,15 +2,13 @@
 금융감독원(FSS), 한국은행(BOK), 금융위원회(FSC) 규제 동향 수집 및 LLM 요약 에이전트.
 
 데이터 소스:
-- FSS: 금융감독원 Open API (API 키 필요; www.fss.or.kr — 구 open.fss.or.kr 서비스 종료)
-- BOK/FSC: 연합뉴스 경제 RSS → 기관별 키워드 필터링
-  (BOK·FSC 공식 RSS는 현재 서비스 중단 상태)
+- FSS: 금융감독원 Open API (API 키 필요; www.fss.or.kr) → 실패 시 네이버 뉴스 폴백
+- BOK/FSC: 네이버 뉴스 검색 API (NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 필요)
 """
 import datetime
 import re
 import math
 
-import feedparser
 import requests
 import numpy as np
 
@@ -21,95 +19,100 @@ log = get_logger("regulatory")
 # ── 데이터 소스 URL 상수 ──────────────────────────────────────────────────────
 # 구 open.fss.or.kr 서비스 종료 → www.fss.or.kr 로 이전, 파라미터명 auth→authKey
 FSS_API_URL     = "http://www.fss.or.kr/fss/kr/openApi/api/fcnInfo.jsp"
-YONHAP_ECON_RSS   = "https://www.yna.co.kr/rss/economy.xml"
-YONHAP_MARKET_RSS = "https://www.yna.co.kr/rss/market.xml"
-
-# 기관 대시보드(BOK/FSC/FSS) 정규식 필터용 — 좁은 피드(경제+시장)만 사용.
-YONHAP_AGENCY_FEEDS = (YONHAP_ECON_RSS, YONHAP_MARKET_RSS)
-# 자연어 직접 검색용 — 정책/산업/일반 카테고리를 추가해 후보 풀(=recall) 확대.
-# (각 피드 약 120건 → 중복 제거 후 수백 건. 정밀도는 의미 재정렬+임계값이 담당.)
-YONHAP_SEARCH_FEEDS = (
-    YONHAP_ECON_RSS,
-    YONHAP_MARKET_RSS,
-    "https://www.yna.co.kr/rss/politics.xml",
-    "https://www.yna.co.kr/rss/industry.xml",
-    "https://www.yna.co.kr/rss/news.xml",
-)
-
-# 기관별 키워드 (정규식): 연합뉴스 기사에서 해당 기관 관련 기사만 추출
-# BOK: 한국은행 공식명 + 주요 업무 키워드 (기준금리·금통위는 BOK 전용 용어)
-_BOK_RE  = re.compile(r"한국은행|금통위|기준금리|한은(?!행)")   # "신한은행" 제외
-_FSC_RE  = re.compile(r"금융위원회|금융위(?!원)")
-_FSS_RE  = re.compile(r"금융감독원|금감원")
-
 _REQUESTS_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-
-# ── 연합뉴스 RSS 단일 fetch (BOK/FSC/FSS 공통) ──────────────────────────────
-
-def _parse_entry_date(entry) -> datetime.date | None:
-    """feedparser 항목의 published_parsed를 datetime.date로 변환."""
-    t = entry.get("published_parsed")
-    if t:
-        try:
-            return datetime.date(t.tm_year, t.tm_mon, t.tm_mday)
-        except Exception:
-            pass
-    return None
+NAVER_NEWS_API_URL = "https://openapi.naver.com/v1/search/news.json"
 
 
-def _fetch_yonhap_entries(feeds: "tuple[str, ...] | list[str] | None" = None) -> list[dict]:
-    """연합뉴스 RSS(여러 카테고리)를 합쳐서 반환. 중복 URL 제거.
+# ── 네이버 뉴스 API ──────────────────────────────────────────────────────────
 
-    feeds 미지정 시 기관 대시보드용 좁은 피드(경제+시장)를 사용한다.
-    자연어 직접 검색은 YONHAP_SEARCH_FEEDS(정책·산업·일반 포함)를 명시 전달한다.
-    """
-    if feeds is None:
-        feeds = YONHAP_AGENCY_FEEDS
-    entries: dict[str, dict] = {}
-    for url in feeds:
-        try:
-            feed = feedparser.parse(url)
-            count = len(feed.entries)
-            log.info("연합뉴스 RSS 수신: %d건 (%s)", count, url)
-            if count == 0:
-                log.warning("연합뉴스 RSS 항목 없음 (bozo=%s): %s", getattr(feed, 'bozo', '?'), url)
-            for e in feed.entries:
-                link = e.get("link", "")
-                if link and link not in entries:
-                    entries[link] = {
-                        "title": e.get("title", "").strip(),
-                        "url": link,
-                        "summary": e.get("summary", "").strip(),
-                        "published_date": _parse_entry_date(e),
-                    }
-        except Exception as exc:
-            log.warning("연합뉴스 RSS 파싱 오류 (%s): %s", url, exc)
-    log.info("연합뉴스 전체 항목: %d건 (중복 제거 후)", len(entries))
-    return list(entries.values())
+def _clean_html(text: str) -> str:
+    """HTML 태그 제거 + 엔티티 디코딩."""
+    import html as _h
+    return _h.unescape(re.sub(r'<[^>]+>', '', text)).strip()
 
 
-def _filter_yonhap(entries: list[dict], pattern: re.Pattern, source: str, count: int) -> list[dict]:
-    """연합뉴스 전체 항목 중 pattern에 매칭되는 항목만 source 라벨로 반환."""
-    results = []
-    for e in entries:
-        text = e["title"] + " " + e["summary"]
-        if pattern.search(text):
-            results.append({"source": source, "title": e["title"], "url": e["url"]})
+def _fetch_naver_news(
+    query: str,
+    date_from: str | None,
+    date_to: str | None,
+    count: int,
+    client_id: str,
+    client_secret: str,
+) -> list[dict]:
+    """네이버 뉴스 검색 API → [{source, title, url, summary, published_date, lexical_score}, ...]"""
+    import email.utils as _eu
+
+    try:
+        from_dt = datetime.date.fromisoformat(date_from) if date_from else None
+        to_dt   = datetime.date.fromisoformat(date_to)   if date_to   else None
+    except ValueError:
+        from_dt = to_dt = None
+
+    results: list[dict] = []
+    start    = 1
+    per_page = min(100, max(count * 2, 20))
+
+    while len(results) < count and start <= 1000:
+        resp = requests.get(
+            NAVER_NEWS_API_URL,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "X-Naver-Client-Id": client_id,
+                "X-Naver-Client-Secret": client_secret,
+            },
+            params={"query": query, "display": per_page, "start": start, "sort": "date"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        if not items:
+            break
+
+        for item in items:
+            pub: datetime.date | None = None
+            try:
+                t = _eu.parsedate(item.get("pubDate", ""))
+                if t:
+                    pub = datetime.date(t[0], t[1], t[2])
+            except Exception:
+                pass
+
+            if from_dt and pub and pub < from_dt:
+                continue
+            if to_dt and pub and pub > to_dt:
+                continue
+
+            results.append({
+                "source": "네이버뉴스",
+                "title": _clean_html(item.get("title", "")),
+                "url": item.get("originallink") or item.get("link", ""),
+                "summary": _clean_html(item.get("description", "")),
+                "published_date": str(pub) if pub else "",
+                "lexical_score": 1.0,
+                "match_count": 1,
+            })
             if len(results) >= count:
                 break
+
+        if len(items) < per_page:
+            break
+        start += per_page
+
+    log.info("네이버 뉴스 검색 완료 (%r): %d건", query, len(results))
     return results
 
 
 # ── 기관별 수집 함수 ─────────────────────────────────────────────────────────
 
-def get_fss_updates(api_key: str, count: int = 3, yonhap_entries: list | None = None) -> list[dict]:
-    """
-    금융감독원 Open API → [{source, title, url}, ...].
-    API 키가 없으면 연합뉴스 RSS에서 '금감원/금융감독원' 언급 기사로 대체.
-
-    www.fss.or.kr fcnInfo API: authKey 파라미터, startDate/endDate(YYYYMMDD) 필요.
-    응답 필드: subject(제목), originUrl(URL), regDate(날짜), publishOrg(발행기관).
+def get_fss_updates(
+    api_key: str,
+    count: int = 3,
+    naver_client_id: str = "",
+    naver_client_secret: str = "",
+) -> list[dict]:
+    """금융감독원 Open API → [{source, title, url}, ...].
+    FSS API 키 없거나 실패 시 네이버 뉴스로 폴백.
     """
     if api_key:
         try:
@@ -119,7 +122,7 @@ def get_fss_updates(api_key: str, count: int = 3, yonhap_entries: list | None = 
                 FSS_API_URL,
                 params={
                     "authKey": api_key,
-                    "pageCount": max(count, 5),  # API 최소 응답 보장
+                    "pageCount": max(count, 5),
                     "apiType": "json",
                     "startDate": start,
                     "endDate": today,
@@ -144,31 +147,69 @@ def get_fss_updates(api_key: str, count: int = 3, yonhap_entries: list | None = 
             if results:
                 log.info("FSS API 수집 완료: %d건", len(results))
                 return results
-            log.warning("FSS API 결과 0건 (연합뉴스로 대체)")
+            log.warning("FSS API 결과 0건 → 네이버 폴백")
         except Exception as exc:
-            log.warning("FSS API 호출 실패 (연합뉴스로 대체): %s", exc)
+            log.warning("FSS API 호출 실패 → 네이버 폴백: %s", exc)
 
-    # API 키 없거나 호출 실패 → 연합뉴스 필터링
-    entries = yonhap_entries if yonhap_entries is not None else _fetch_yonhap_entries()
-    results = _filter_yonhap(entries, _FSS_RE, "금융감독원", count)
-    log.info("FSS 연합뉴스 대체 수집: %d건", len(results))
-    return results
+    if naver_client_id and naver_client_secret:
+        try:
+            items = _fetch_naver_news(
+                "금융감독원 금감원", None, None, count, naver_client_id, naver_client_secret,
+            )
+            if items:
+                for it in items:
+                    it["source"] = "금융감독원"
+                log.info("FSS 네이버 폴백 수집: %d건", len(items))
+                return items
+        except Exception as exc:
+            log.warning("FSS 네이버 폴백 실패: %s", exc)
+
+    log.warning("FSS 수집 실패 (API 키 및 네이버 키 모두 없거나 오류)")
+    return []
 
 
-def get_bok_updates(count: int = 3, yonhap_entries: list | None = None) -> list[dict]:
-    """한국은행 관련 연합뉴스 기사 → [{source, title, url}, ...]"""
-    entries = yonhap_entries if yonhap_entries is not None else _fetch_yonhap_entries()
-    results = _filter_yonhap(entries, _BOK_RE, "한국은행", count)
-    log.info("BOK 수집 완료: %d건", len(results))
-    return results
+def get_bok_updates(
+    count: int = 3,
+    naver_client_id: str = "",
+    naver_client_secret: str = "",
+) -> list[dict]:
+    """한국은행 관련 기사 → [{source, title, url}, ...]. 네이버 API 사용."""
+    if naver_client_id and naver_client_secret:
+        try:
+            items = _fetch_naver_news(
+                "한국은행 기준금리", None, None, count, naver_client_id, naver_client_secret,
+            )
+            if items:
+                for it in items:
+                    it["source"] = "한국은행"
+                log.info("BOK 수집 완료: %d건", len(items))
+                return items
+        except Exception as exc:
+            log.warning("BOK 네이버 검색 실패: %s", exc)
+    log.warning("BOK 수집 실패 (네이버 키 없거나 오류)")
+    return []
 
 
-def get_fsc_updates(count: int = 3, yonhap_entries: list | None = None) -> list[dict]:
-    """금융위원회 관련 연합뉴스 기사 → [{source, title, url}, ...]"""
-    entries = yonhap_entries if yonhap_entries is not None else _fetch_yonhap_entries()
-    results = _filter_yonhap(entries, _FSC_RE, "금융위원회", count)
-    log.info("FSC 수집 완료: %d건", len(results))
-    return results
+def get_fsc_updates(
+    count: int = 3,
+    naver_client_id: str = "",
+    naver_client_secret: str = "",
+) -> list[dict]:
+    """금융위원회 관련 기사 → [{source, title, url}, ...]. 네이버 API 사용."""
+    if naver_client_id and naver_client_secret:
+        try:
+            items = _fetch_naver_news(
+                "금융위원회", None, None, count, naver_client_id, naver_client_secret,
+            )
+            if items:
+                for it in items:
+                    it["source"] = "금융위원회"
+                log.info("FSC 수집 완료: %d건", len(items))
+                return items
+        except Exception as exc:
+            log.warning("FSC 네이버 검색 실패: %s", exc)
+    log.warning("FSC 수집 실패 (네이버 키 없거나 오류)")
+    return []
 
 
 # ── LLM 요약 ────────────────────────────────────────────────────────────────
@@ -199,22 +240,21 @@ def fetch_and_summarize(
     fss_api_key: str,
     llm,
     count_per_source: int = 3,
+    naver_client_id: str = "",
+    naver_client_secret: str = "",
 ) -> list[dict]:
     """
     세 기관 데이터 수집 후 각 항목을 LLM으로 요약.
 
-    연합뉴스 RSS를 한 번만 fetch해서 BOK·FSC·FSS(API 키 없을 때)에 공유.
+    FSS: FSS API → 네이버 폴백. BOK/FSC: 네이버 API.
 
     Returns:
         list of dict: source, title, url, summary
     """
-    # 연합뉴스 RSS 공통 fetch
-    yonhap = _fetch_yonhap_entries()
-
     all_items = (
-        get_fss_updates(fss_api_key, count_per_source, yonhap)
-        + get_bok_updates(count_per_source, yonhap)
-        + get_fsc_updates(count_per_source, yonhap)
+        get_fss_updates(fss_api_key, count_per_source, naver_client_id, naver_client_secret)
+        + get_bok_updates(count_per_source, naver_client_id, naver_client_secret)
+        + get_fsc_updates(count_per_source, naver_client_id, naver_client_secret)
     )
 
     if not all_items:
@@ -234,114 +274,6 @@ def fetch_and_summarize(
     return results
 
 
-# ── 연합뉴스 직접 키워드 검색 ────────────────────────────────────────────────
-
-def search_yonhap_by_keyword(
-    keyword: str,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    count: int = 10,
-) -> list[dict]:
-    """
-    연합뉴스 RSS에서 키워드/문장으로 직접 검색.
-
-    Args:
-        keyword: 검색 키워드 또는 문장 (제목+요약에서 단어 매칭)
-        date_from: 시작일 "YYYY-MM-DD" (없으면 제한 없음)
-        date_to: 종료일 "YYYY-MM-DD" (없으면 제한 없음)
-        count: 최대 반환 건수
-
-    Returns:
-        list of dict: source, title, url, summary, published_date
-    """
-    try:
-        from_dt = datetime.date.fromisoformat(date_from) if date_from else None
-        to_dt = datetime.date.fromisoformat(date_to) if date_to else None
-    except ValueError:
-        from_dt = to_dt = None
-
-    entries = _fetch_yonhap_entries()
-    keywords = keyword.lower().split()
-    results = []
-
-    for e in entries:
-        # 날짜 필터
-        pub = e.get("published_date")
-        if from_dt and pub and pub < from_dt:
-            continue
-        if to_dt and pub and pub > to_dt:
-            continue
-
-        # 키워드 매칭 (하나라도 포함되면 채택)
-        text = (e["title"] + " " + e["summary"]).lower()
-        if any(kw in text for kw in keywords):
-            results.append({
-                "source": "연합뉴스",
-                "title": e["title"],
-                "url": e["url"],
-                "summary": e.get("summary", ""),
-                "published_date": str(pub) if pub else "",
-            })
-            if len(results) >= count:
-                break
-
-    log.info("연합뉴스 키워드 검색 완료 (%r): %d건", keyword, len(results))
-    return results
-
-
-def extract_question_keywords(question: str, llm, max_n: int = 5) -> list[str]:
-    """질문에서 연합뉴스 RSS 검색에 쓸 핵심 키워드를 최대 max_n개 추출."""
-    from langchain_core.prompts import PromptTemplate
-    from langchain_core.output_parsers import StrOutputParser
-
-    template = """[Context]
-당신은 금융 규제·리스크 뉴스 검색 시스템의 키워드 생성기입니다.
-검색 대상: 연합뉴스 RSS 헤드라인 (금융·경제·규제 섹션)
-사용 목적: 생성된 키워드로 연합뉴스에서 관련 기사를 검색합니다.
-
-[Objective]
-아래 질문의 답을 찾기 위한 핵심 검색 키워드를 {max_n}개 이하로 추출하세요.
-
-[Rules]
-- 한 키워드는 1~3 단어의 짧은 명사구.
-- 일반적/모호한 단어(예: '한국','경제','뉴스','전망')는 제외.
-- 고유명사(기관·인물·정책명)와 핵심 사건/지표를 우선.
-- 결과는 쉼표(,)로만 구분하여 한 줄로 출력. 다른 설명·번호·따옴표 금지.
-
-[Response]
-쉼표 구분 키워드 한 줄만 출력. 다른 텍스트 없이.
-
-[질문]
-{question}
-
-[키워드]:"""
-    prompt = PromptTemplate.from_template(template)
-    chain = prompt | llm | StrOutputParser()
-    try:
-        raw = chain.invoke({"question": question, "max_n": max_n})
-    except Exception as exc:
-        log.warning("키워드 추출 실패: %s", exc)
-        return [question.strip()] if question.strip() else []
-
-    tokens = re.split(r"[,\n;·•\|]+", raw)
-    keywords: list[str] = []
-    for t in tokens:
-        kw = t.strip().strip("\"'`[](){}<>")
-        kw = re.sub(r"^\d+[\.\)]\s*", "", kw)
-        if not kw or len(kw) > 30:
-            continue
-        if kw in keywords:
-            continue
-        keywords.append(kw)
-        if len(keywords) >= max_n:
-            break
-
-    if not keywords:
-        keywords = [question.strip()]
-    log.info("질문 키워드 추출: %r → %s", question[:40], keywords)
-    return keywords
-
-
 def extract_search_queries(question: str, llm, max_n: int = 5) -> list[str]:
     """
     질문으로부터 뉴스 헤드라인에 실제 등장할 법한 검색 표현을 최대 max_n개 생성.
@@ -356,11 +288,11 @@ def extract_search_queries(question: str, llm, max_n: int = 5) -> list[str]:
 
     template = """[Context]
 당신은 금융 규제·리스크 뉴스 검색 시스템의 검색 표현 생성기입니다.
-검색 대상: 연합뉴스 RSS 헤드라인 (금융·경제·규제 섹션)
+검색 대상: 네이버 뉴스 헤드라인 (금융·경제·규제 섹션)
 사용 목적: 같은 개념을 다양하게 표현하여 검색 recall을 높입니다.
 
 [Objective]
-아래 질문의 답을 찾기 위해 연합뉴스 기사 제목에서 검색할 표현을 {max_n}개 생성하세요.
+아래 질문의 답을 찾기 위해 뉴스 기사 제목에서 검색할 표현을 {max_n}개 생성하세요.
 
 [Rules]
 - 각 표현은 실제 뉴스 헤드라인에 등장할 법한 짧은 표현 (1~4 어절).
@@ -464,120 +396,39 @@ def rerank_by_question(
         return candidates[:top_n]
 
 
-def _tokenize_queries(keywords: list[str]) -> "tuple[list[str], list[str]]":
-    """검색표현 리스트를 (구절, 단어) 두 목록으로 정규화한다.
-
-    - 구절: 공백을 포함한 원본 표현(연속일치 보너스 판정용).
-    - 단어: 각 표현을 어절 단위로 분해(부분일치 점수용). 1글자 토큰은 노이즈라 제외.
-    한국어 조사는 substring 매칭으로 자연 흡수된다(예: '기준금리' in '기준금리를' = True).
-    """
-    phrases: list[str] = []
-    words: list[str] = []
-    for kw in keywords:
-        if not kw or not kw.strip():
-            continue
-        p = kw.lower().strip()
-        if p not in phrases:
-            phrases.append(p)
-        for w in p.split():
-            if len(w) >= 2 and w not in words:
-                words.append(w)
-    return phrases, words
-
-
-def search_yonhap_by_keywords(
+def search_news_by_keywords(
     keywords: list[str],
     date_from: str | None = None,
     date_to: str | None = None,
     count: int = 10,
+    naver_client_id: str = "",
+    naver_client_secret: str = "",
 ) -> list[dict]:
-    """검색표현(구절) 리스트로 연합뉴스 후보 기사를 생성한다 (하이브리드 렉시컬 스코어링).
+    """네이버 뉴스 API로 키워드별 검색 후 URL 중복 제거하여 반환.
 
-    기존 방식은 '기준금리 인하' 같은 다단어 구절을 통째로 연속일치(`kw in text`)시키려
-    해서 실제 헤드라인과 거의 맞지 않아 0건이 되었다. 이를 어절 단위 부분일치로 바꾼다.
-    - 단어 부분일치: 매칭 단어 1개당 +1
-    - 구절 전체가 연속일치하면 추가 보너스: +2
-    매칭 0인 기사도 버리지 않고(의미 재정렬 단계에서 회수될 수 있음) 후보로 유지하되,
-    렉시컬 점수 ↓ → 날짜 최신순으로 정렬해 상위 count건을 반환한다. 정밀도(관련성 판정)는
-    호출부의 BGE-M3 의미 재정렬 + 유사도 임계값이 담당한다.
+    네이버 키 미설정 시 빈 리스트 반환.
+    반환 항목: source, title, url, summary, published_date, lexical_score, match_count.
     """
+    if not (naver_client_id and naver_client_secret):
+        log.warning("네이버 API 키 미설정 — 뉴스 검색 불가")
+        return []
+
     try:
-        from_dt = datetime.date.fromisoformat(date_from) if date_from else None
-        to_dt = datetime.date.fromisoformat(date_to) if date_to else None
-    except ValueError:
-        from_dt = to_dt = None
-
-    phrases, words = _tokenize_queries(keywords)
-    if not phrases:
+        per_kw    = max(count // max(len(keywords), 1), 5)
+        seen_urls: set[str] = set()
+        merged: list[dict]  = []
+        for kw in keywords[:5]:
+            for item in _fetch_naver_news(kw, date_from, date_to, per_kw,
+                                          naver_client_id, naver_client_secret):
+                if item["url"] and item["url"] not in seen_urls:
+                    seen_urls.add(item["url"])
+                    item["matched_keywords"] = [kw]
+                    merged.append(item)
+        log.info("네이버 뉴스 통합 결과: %d건", len(merged))
+        return merged[:count]
+    except Exception as exc:
+        log.warning("네이버 뉴스 검색 실패: %s", exc)
         return []
-
-    entries = _fetch_yonhap_entries(YONHAP_SEARCH_FEEDS)
-    scored: list[tuple[float, datetime.date, dict]] = []
-
-    for e in entries:
-        pub = e.get("published_date")
-        if from_dt and pub and pub < from_dt:
-            continue
-        if to_dt and pub and pub > to_dt:
-            continue
-        text = (e["title"] + " " + e["summary"]).lower()
-        matched_words = [w for w in words if w in text]
-        matched_phrases = [p for p in phrases if " " in p and p in text]
-        score = float(len(matched_words)) + 2.0 * len(matched_phrases)
-        item = {
-            "source": "연합뉴스",
-            "title": e["title"],
-            "url": e["url"],
-            "summary": e.get("summary", ""),
-            "published_date": str(pub) if pub else "",
-            "matched_keywords": matched_words,
-            "match_count": len(matched_words),
-            "lexical_score": score,
-        }
-        scored.append((score, pub or datetime.date.min, item))
-
-    # 렉시컬 점수 ↓, 날짜 ↓ 정렬 (0점 기사도 후보 유지 → 의미 재정렬이 정밀도 담당)
-    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    results = [item for _, _, item in scored[:count]]
-
-    n_hit = sum(1 for s, _, _ in scored if s > 0)
-    log.info(
-        "연합뉴스 후보 생성: 표현 %d개(단어 %d) → 후보 %d건 반환 "
-        "(렉시컬 매칭 %d건 / 전체 후보 %d건)",
-        len(phrases), len(words), len(results), n_hit, len(scored),
-    )
-    return results
-
-
-def fetch_and_summarize_yonhap(
-    keyword: str,
-    date_from: str | None,
-    date_to: str | None,
-    llm,
-    count: int = 10,
-) -> list[dict]:
-    """
-    연합뉴스 키워드 검색 후 LLM으로 요약.
-
-    Returns:
-        list of dict: source, title, url, summary (LLM 요약)
-    """
-    items = search_yonhap_by_keyword(keyword, date_from, date_to, count)
-    if not items:
-        log.warning("연합뉴스 키워드 검색 결과 없음: %r", keyword)
-        return []
-
-    results: list[dict] = []
-    for item in items:
-        try:
-            summary = summarize_update(item["source"], item["title"], item["url"], llm)
-        except Exception as exc:
-            log.warning("LLM 요약 실패 (%s): %s", item["title"][:40], exc)
-            summary = f"(요약 실패: {exc})\n출처: {item['url']}"
-        results.append({**item, "summary": summary})
-
-    log.info("연합뉴스 검색·요약 완료: 총 %d건", len(results))
-    return results
 
 
 # ── Outlook 메일 발송 ────────────────────────────────────────────────────────
@@ -640,7 +491,7 @@ def send_regulatory_email(to_address: str, results: list[dict]) -> None:
             pass
 
 
-# ── 연합뉴스 임베딩 + 클러스터링 ─────────────────────────────────────────────
+# ── 뉴스 임베딩 + 클러스터링 ────────────────────────────────────────────────
 
 def _embed_texts(texts: list[str], embed_url: str, model: str = "bge-m3", timeout: int = 45) -> np.ndarray | None:
     """BGE-M3 임베딩 서버를 통해 텍스트 목록을 벡터화합니다."""
@@ -659,7 +510,7 @@ def _embed_texts(texts: list[str], embed_url: str, model: str = "bge-m3", timeou
         return None
 
 
-def cluster_yonhap_results(
+def cluster_news_results(
     results: list[dict],
     query: str,
     embed_url: str,
@@ -667,10 +518,10 @@ def cluster_yonhap_results(
     embed_timeout: int = 45,
 ) -> list[dict]:
     """
-    연합뉴스 검색 결과를 임베딩 후 KMeans 클러스터링하여 클러스터별 대표 기사 2개를 반환합니다.
+    뉴스 검색 결과를 임베딩 후 KMeans 클러스터링하여 클러스터별 대표 기사 2개를 반환합니다.
 
     Args:
-        results: fetch_and_summarize_yonhap의 출력 (source, title, url, summary, ...)
+        results: search_news_by_keywords 결과 (source, title, url, summary, ...)
         query: 원래 검색 키워드 (임베딩에 포함하여 의미 정렬에 활용)
         embed_url: BGE-M3 서버 base URL
         embed_model: 모델명
@@ -763,7 +614,7 @@ def cluster_yonhap_results(
             item['cluster_rank'] = rank_of.get(c, 999)
             item['cluster_similarity'] = round(cluster_sim.get(c, 0.0), 4)
 
-        log.info("연합뉴스 클러스터링 완료: %d건 → %d 클러스터 (정렬됨)", n, k)
+        log.info("뉴스 클러스터링 완료: %d건 → %d 클러스터 (정렬됨)", n, k)
     except ImportError:
         log.warning("scikit-learn 미설치 — 클러스터링 생략, 전체 표시")
         for i, item in enumerate(results):
@@ -820,7 +671,7 @@ def summarize_clusters_for_question(
         )
 
     template = """당신은 은행 리스크 관리 부서를 위한 뉴스 분석 어시스턴트입니다.
-사용자의 질문에 대해 아래 연합뉴스 대표 기사들의 정보를 종합하여 답하세요.
+사용자의 질문에 대해 아래 뉴스 대표 기사들의 정보를 종합하여 답하세요.
 {caveat}
 [질문]
 {question}

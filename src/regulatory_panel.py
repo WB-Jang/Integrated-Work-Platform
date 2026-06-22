@@ -44,7 +44,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             '<div class="titles">'
             '<div class="page-title">규제 동향</div>'
             '<div class="page-subtitle">금융감독원·한국은행·금융위원회 보도자료 또는 '
-            '연합뉴스 직접 검색을 LLM으로 요약합니다.</div>'
+            '네이버/BIGKinds/연합뉴스 뉴스 검색을 LLM으로 요약합니다.</div>'
             '</div>'
         )
 
@@ -62,7 +62,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             ui.html('<div class="muted-label">검색 방식</div>')
             with ui.row().classes('gap-2 mb-4 w-full no-wrap'):
                 btn_agency = ui.button('기관별 모니터링').classes('btn-primary-mono flex-1')
-                btn_yna    = ui.button('연합뉴스 직접 검색').classes('btn-primary-mono flex-1')
+                btn_yna    = ui.button('뉴스 검색').classes('btn-primary-mono flex-1')
 
             # ── 기관별 모드 UI ───────────────────────────────────────────
             agency_panel = ui.element('div')
@@ -81,7 +81,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
                     '<div class="muted-text" style="margin-top:8px;"></div>'
                 )
 
-            # ── 연합뉴스 직접 검색 UI ────────────────────────────────────
+            # ── 뉴스 검색 UI ────────────────────────────────────────────
             yna_panel = ui.element('div')
             yna_panel.visible = False
             with yna_panel:
@@ -136,7 +136,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             btn_yna.classes(remove='btn-primary-mono', add='btn-primary-mono')
 
     btn_agency.on_click(lambda: _set_mode('agency'))
-    btn_yna.on_click(lambda: _set_mode('yonhap'))
+    btn_yna.on_click(lambda: _set_mode('news'))
 
     # ─── 렌더링 ─────────────────────────────────────────────────────────
 
@@ -266,7 +266,9 @@ def build_regulatory_panel(config: dict, create_llm_fn):
         _apply_current_user()
         log.info('규제동향(기관별) 조회 시작')
         count = int(count_input.value or 3)
-        fss_api_key = config.get('fss_api_key', '').strip()
+        fss_api_key       = config.get('fss_api_key', '').strip()
+        naver_client_id   = config.get('naver_client_id', '').strip()
+        naver_client_secret = config.get('naver_client_secret', '').strip()
 
         fetch_progress.visible = True
         fetch_btn_agency.props(add='disable')
@@ -283,6 +285,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             from regulatory_agent import fetch_and_summarize
             results = await nicegui_run.io_bound(
                 fetch_and_summarize, fss_api_key, llm, count,
+                naver_client_id, naver_client_secret,
             )
             state['results'] = results
             _render_results(results)
@@ -303,7 +306,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             fetch_progress.visible = False
             fetch_btn_agency.props(remove='disable')
 
-    # ─── 연합뉴스 검색 ──────────────────────────────────────────────────
+    # ─── 뉴스 검색 ──────────────────────────────────────────────────────
 
     async def fetch_yonhap_search():
         _apply_current_user()
@@ -311,11 +314,13 @@ def build_regulatory_panel(config: dict, create_llm_fn):
         if not question:
             ui.notify('질문을 입력하세요.', type='warning', position='top')
             return
-        log.info('규제동향(연합뉴스) 질의: %s', question[:120])
+        log.info('규제동향(뉴스검색) 질의: %s', question[:120])
 
         date_from = (date_from_input.value or '').strip() or None
-        date_to = (date_to_input.value or '').strip() or None
-        count = int(yna_count_input.value or 10)
+        date_to   = (date_to_input.value or '').strip() or None
+        count     = int(yna_count_input.value or 10)
+        naver_client_id     = config.get('naver_client_id', '').strip()
+        naver_client_secret = config.get('naver_client_secret', '').strip()
 
         fetch_progress.visible = True
         fetch_btn_yna.props(add='disable')
@@ -331,10 +336,10 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             llm = create_llm_fn()
             from regulatory_agent import (
                 extract_search_queries,
-                search_yonhap_by_keywords,
+                search_news_by_keywords,
                 rerank_by_question,
                 summarize_update,
-                cluster_yonhap_results,
+                cluster_news_results,
                 summarize_clusters_for_question,
             )
 
@@ -351,11 +356,11 @@ def build_regulatory_panel(config: dict, create_llm_fn):
                 f'(표현: {", ".join(search_queries)})</div>'
             )
 
-            # 2) 검색 표현으로 연합뉴스 RSS 후보 수집
-            #    (정책·산업 포함 넓은 풀에서 어절 단위 렉시컬 스코어링)
+            # 2) 검색 표현으로 뉴스 후보 수집 (네이버→BIGKinds→연합뉴스 RSS 순)
             fetch_count = min(count * 3, 30)
             items = await nicegui_run.io_bound(
-                search_yonhap_by_keywords, search_queries, date_from, date_to, fetch_count,
+                search_news_by_keywords, search_queries, date_from, date_to, fetch_count,
+                naver_client_id, naver_client_secret,
             )
 
             # 3) BGE-M3 질문-기사 유사도 재정렬(항상 수행 → 관련성 점수 확보) + 임계값 판정
@@ -420,7 +425,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             clustered = False
             if len(results) >= 3:
                 results = await nicegui_run.io_bound(
-                    cluster_yonhap_results,
+                    cluster_news_results,
                     results, question, embed_url, embed_model, embed_timeout,
                 )
                 clustered = True
@@ -452,7 +457,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
                 if approximate else ''
             )
             result_count_label.content = (
-                f'<div class="info-block"><b>연합뉴스 검색 결과: {len(results)}건{cluster_info}</b>'
+                f'<div class="info-block"><b>뉴스 검색 결과: {len(results)}건{cluster_info}</b>'
                 f'{approx_note} (검색 표현: {_html.escape(kws_str)})</div>'
             )
             fetch_status_yna.content = (

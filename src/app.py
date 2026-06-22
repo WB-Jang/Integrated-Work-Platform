@@ -160,6 +160,14 @@ _env_fss_key = os.environ.get("FSS_API_KEY", "").strip()
 if _env_fss_key:
     _config["fss_api_key"] = _env_fss_key
 
+_env_naver_id = os.environ.get("NAVER_CLIENT_ID", "").strip()
+if _env_naver_id:
+    _config["naver_client_id"] = _env_naver_id
+
+_env_naver_secret = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+if _env_naver_secret:
+    _config["naver_client_secret"] = _env_naver_secret
+
 BASE_URL = _config.get("llm_base_url", "http://localhost:8080/v1")
 MODEL_NAME = _config.get("model_name", "llama-3-Korean-Bllossom-8B-Q4_K_M")
 # HOST/PORT 는 env 가 있으면 우선 (Docker/HF Spaces 호환)
