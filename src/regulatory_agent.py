@@ -24,6 +24,19 @@ _REQUESTS_HEADERS = {"User-Agent": "Mozilla/5.0"}
 NAVER_NEWS_API_URL = "https://openapi.naver.com/v1/search/news.json"
 
 
+def _parse_date_input(s: str | None) -> "datetime.date | None":
+    """YYYY-MM-DD 또는 YYYYMMDD 문자열을 datetime.date로 변환. 파싱 실패 시 None."""
+    if not s:
+        return None
+    s = s.strip()
+    if len(s) == 8 and s.isdigit():
+        s = f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    try:
+        return datetime.date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
 # ── 네이버 뉴스 API ──────────────────────────────────────────────────────────
 
 def _clean_html(text: str) -> str:
@@ -43,11 +56,8 @@ def _fetch_naver_news(
     """네이버 뉴스 검색 API → [{source, title, url, summary, published_date, lexical_score}, ...]"""
     import email.utils as _eu
 
-    try:
-        from_dt = datetime.date.fromisoformat(date_from) if date_from else None
-        to_dt   = datetime.date.fromisoformat(date_to)   if date_to   else None
-    except ValueError:
-        from_dt = to_dt = None
+    from_dt = _parse_date_input(date_from)
+    to_dt   = _parse_date_input(date_to)
 
     results: list[dict] = []
     start    = 1

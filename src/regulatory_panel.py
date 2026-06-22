@@ -90,10 +90,10 @@ def build_regulatory_panel(config: dict, create_llm_fn):
                     placeholder='예: 최근 한국은행 기준금리 인하 전망은 어떻습니까?',
                 ).props('outlined dense').classes('w-full mb-2')
                 date_from_input = ui.input(
-                    label='시작일 (YYYY-MM-DD)', placeholder='예: 2025-01-01',
+                    label='시작일 (YYYY-MM-DD 또는 YYYYMMDD)', placeholder='예: 2025-01-01 또는 20250101',
                 ).props('outlined dense').classes('w-full mb-2')
                 date_to_input = ui.input(
-                    label='종료일 (YYYY-MM-DD)', placeholder='예: 2025-12-31',
+                    label='종료일 (YYYY-MM-DD 또는 YYYYMMDD)', placeholder='예: 2025-12-31 또는 20251231',
                 ).props('outlined dense').classes('w-full mb-2')
                 yna_count_input = ui.number(
                     label='최대 조회 건수', value=10, min=1, max=30, step=1,
