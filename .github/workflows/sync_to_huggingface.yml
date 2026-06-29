@@ -1,0 +1,23 @@
+name: Sync to Hugging Face Space
+
+on:
+  push:
+    branches:
+      - main # main 브랜치에 push될 때 작동합니다.
+
+jobs:
+  sync-to-hub:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true # AI 모델 파일이나 대용량 데이터(Git LFS)가 있다면 반드시 true로 설정해야 합니다.
+
+      - name: Push to Hugging Face Hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git remote add space https://huggingface.co/spaces/eeariorie/Integrated-Work-Platform
+          git push --force https://eeariorie:$HF_TOKEN@huggingface.co/spaces/eeariorie/Integrated-Work-Platform main 
