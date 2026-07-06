@@ -149,7 +149,7 @@ def show_unavailable_dialog() -> None:
             ui.html(
                 '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
                 '<span class="material-symbols-outlined" '
-                'style="font-size:22px;color:#d97706;">cloud_off</span>'
+                'style="font-size:22px;color:var(--warning);">cloud_off</span>'
                 '<span style="font-size:15px;font-weight:700;color:var(--text);">'
                 'LLM 서버 미연결</span>'
                 '</div>'

@@ -66,8 +66,8 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
     if not outlook_ok:
         ui.html(
             '<div style="margin:0 0 16px;padding:12px 14px;'
-            'background:#fef3c7;border:1px solid #fde68a;border-radius:8px;'
-            'color:#92400e;font-size:13px;line-height:1.55;">'
+            'background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);border-radius:8px;'
+            'color:var(--warning);font-size:13px;line-height:1.55;">'
             '<b>⚠ 베타 환경 안내</b><br>'
             + _html.escape(_OUTLOOK_UNAVAILABLE_MSG) +
             '</div>'
@@ -215,7 +215,7 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
                 reply_chip = ''
                 if reply_status:
                     reply_chip = (
-                        f'<span class="tag" style="color:#7c3aed;border-color:#c4b5fd;" '
+                        f'<span class="tag" style="color:#a78bfa;border-color:rgba(167,139,250,.4);" '
                         f'title="{_html.escape(reply_status)}">↩ '
                         f'{_html.escape(reply_status.split(" ")[0])}</span>'
                     )

@@ -181,7 +181,7 @@ def build_reporting_panel(config: dict):
                     _status.content = (
                         f'<div style="color:var(--text);font-size:11.5px;margin-top:2px;'
                         f'display:flex;align-items:center;gap:6px;">'
-                        f'<span class="material-symbols-outlined" style="font-size:13px;color:#16a34a;">check_circle</span>'
+                        f'<span class="material-symbols-outlined" style="font-size:13px;color:var(--success);">check_circle</span>'
                         f'{_html.escape(orig_name)} ({len(data)//1024}KB)'
                         f'</div>'
                     )

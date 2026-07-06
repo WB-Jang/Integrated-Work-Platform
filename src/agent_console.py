@@ -309,11 +309,11 @@ def plan_command(command: str, create_llm, model_id) -> dict:
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 _STATUS_META = {
-    "대기":   ("#92400e", "#fef3c7", "#d97706"),
-    "실행중": ("#1e40af", "#dbeafe", "#3b82f6"),
-    "완료":   ("#15803d", "#dcfce7", "#22c55e"),
-    "건너뜀": ("#525252", "#f5f5f5", "#a3a3a3"),
-    "실패":   ("#b91c1c", "#fee2e2", "#ef4444"),
+    "대기":   ("#f59e0b", "rgba(245,158,11,.12)", "rgba(245,158,11,.35)"),
+    "실행중": ("#0ea5e9", "rgba(14,165,233,.12)", "rgba(14,165,233,.35)"),
+    "완료":   ("#22c55e", "rgba(34,197,94,.1)", "rgba(34,197,94,.3)"),
+    "건너뜀": ("rgba(148,163,184,.7)", "rgba(255,255,255,.05)", "rgba(255,255,255,.15)"),
+    "실패":   ("#ef4444", "rgba(239,68,68,.1)", "rgba(239,68,68,.3)"),
 }
 
 
@@ -385,7 +385,9 @@ def build_agent_panel(parent, state, create_llm, config):
             def _set_status(i: int, status: str):
                 pstate['steps'][i]['status'] = status
                 card = pstate['cards'][i]
-                fg, bg, bd = _STATUS_META.get(status, ('#525252', '#f5f5f5', '#a3a3a3'))
+                fg, bg, bd = _STATUS_META.get(
+                    status, ('rgba(148,163,184,.7)', 'rgba(255,255,255,.05)', 'rgba(255,255,255,.15)'),
+                )
                 card['badge'].content = (
                     f'<span style="padding:2px 10px;border-radius:999px;font-size:11.5px;'
                     f'font-weight:600;color:{fg};background:{bg};border:1px solid {bd};">'
@@ -427,7 +429,8 @@ def build_agent_panel(parent, state, create_llm, config):
                 except Exception as e:
                     result_box.content = (
                         '<div style="margin-top:8px;padding:10px 12px;border-radius:var(--radius);'
-                        'background:#fee2e2;border:1px solid #ef4444;font-size:13px;color:#b91c1c;">'
+                        'background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35);'
+                        'font-size:13px;color:var(--danger);">'
                         f'실행 오류: {_html.escape(str(e))}</div>'
                     )
                     _set_status(i, '실패')
@@ -496,15 +499,15 @@ def build_agent_panel(parent, state, create_llm, config):
                 with clarif_area:
                     with ui.element('div').style(
                         'margin-top:14px;padding:14px 16px;border-radius:var(--radius-lg);'
-                        'border:1px solid #f59e0b;background:#fffbeb;'
+                        'border:1px solid rgba(245,158,11,.35);background:rgba(245,158,11,.08);'
                     ):
                         ui.html(
-                            '<div style="font-size:13px;font-weight:600;color:#92400e;margin-bottom:10px;">'
+                            '<div style="font-size:13px;font-weight:600;color:var(--warning);margin-bottom:10px;">'
                             '에이전트가 정확한 계획 수립을 위해 추가 정보를 요청합니다</div>'
                         )
                         for q in questions:
                             ui.html(
-                                f'<div style="font-size:12.5px;color:#78350f;margin:8px 0 4px;">'
+                                f'<div style="font-size:12.5px;color:var(--text-2);margin:8px 0 4px;">'
                                 f'{_html.escape(str(q))}</div>'
                             )
                             inp = ui.textarea().props('outlined autogrow rows=1 dense').classes('w-full')
@@ -562,7 +565,7 @@ def build_agent_panel(parent, state, create_llm, config):
                     _render_steps(result.get('steps', []))
                 except Exception as e:
                     plan_msg.content = (
-                        '<div style="margin-top:8px;color:#b91c1c;font-size:13px;">'
+                        '<div style="margin-top:8px;color:var(--danger);font-size:13px;">'
                         f'계획 수립 오류: {_html.escape(str(e))}</div>'
                     )
                     log.error("계획 수립 오류: %s", e)

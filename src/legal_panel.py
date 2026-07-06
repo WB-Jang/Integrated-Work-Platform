@@ -243,6 +243,22 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
             )
         meta_html = ''.join(chips)
 
+        docs_html = ''
+        if docs:
+            cards = []
+            for d in docs[:3]:
+                snippet = _html.escape(d[:220]).replace('\n', ' ')
+                cards.append(
+                    '<div class="result-item" style="margin-top:8px;padding:10px 14px;">'
+                    f'<div style="font-size:12px;line-height:1.7;color:var(--text-2);">{snippet}…</div>'
+                    '</div>'
+                )
+            docs_html = (
+                '<div style="padding-left:30px;margin-top:6px;">'
+                f'<div class="muted-label" style="margin-bottom:0;">참고 조항/판례</div>{"".join(cards)}'
+                '</div>'
+            )
+
         with chat_inner:
             ui.html(
                 '<div class="msg ai">'
@@ -251,6 +267,7 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 '</div>'
                 f'<div class="msg-body">{safe_answer}</div>'
                 + (f'<div class="msg-meta">{meta_html}</div>' if meta_html else '')
+                + docs_html
                 + '</div>'
             )
             # ui.run_javascript는 slot 컨텍스트 필요 — with 블록 안에서 호출

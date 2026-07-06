@@ -23,7 +23,7 @@ def highlight_errors(original_text, analysis_result_json):
 
             # 2. 단순 replace 시도
             if target in highlighted_text:
-                replacement = f"<span style='background-color: #ffdce0; color: #d8000c; font-weight: bold; padding: 2px 4px; border-radius: 4px;'>{target}</span>"
+                replacement = f"<span style='background-color: rgba(239,68,68,.18); color: #fca5a5; font-weight: bold; padding: 2px 4px; border-radius: 4px; border-bottom: 2px solid #ef4444;'>{target}</span>"
                 highlighted_text = highlighted_text.replace(target, replacement)
 
             # 3. [보완] 단순 매칭 실패 시, 공백/줄바꿈을 유연하게 처리하여 검색
@@ -35,7 +35,7 @@ def highlight_errors(original_text, analysis_result_json):
                 pattern = escaped_target.replace(r"\ ", r"\s+")
 
                 # HTML 태그로 감싸기 위한 정규식 치환
-                replacement = f"<span style='background-color: #ffdce0; color: #d8000c; font-weight: bold; padding: 2px 4px; border-radius: 4px;'>\g<0></span>"
+                replacement = f"<span style='background-color: rgba(239,68,68,.18); color: #fca5a5; font-weight: bold; padding: 2px 4px; border-radius: 4px; border-bottom: 2px solid #ef4444;'>\g<0></span>"
 
                 # 원본 텍스트가 이미 HTML 태그 등으로 오염되지 않았다고 가정하고 수행
                 highlighted_text = re.sub(pattern, replacement, highlighted_text)

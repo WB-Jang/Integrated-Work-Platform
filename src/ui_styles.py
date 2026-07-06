@@ -378,6 +378,123 @@ html body #main-nav * {
 }
 
 /* ─────────────────────────────────────────────────────────
+   IWP-Redesign-B 목업 유틸리티 클래스
+   (raw ui.html() 마크업에서 쓰는 카드/배지/칩 — Quasar 컴포넌트가 아니므로
+   위 .q-btn 등 오버라이드와는 별개로 직접 정의해야 함)
+   ───────────────────────────────────────────────────────── */
+.card {
+  background: rgba(255,255,255,.025);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.result-item {
+  background: rgba(255,255,255,.02);
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 10px;
+  padding: 16px 18px;
+  cursor: pointer;
+  transition: all .2s;
+}
+.result-item:hover {
+  border-color: rgba(14,165,233,.28);
+  background: rgba(14,165,233,.03);
+  transform: translateY(-1px);
+}
+.err-highlight {
+  background: rgba(239,68,68,.15);
+  border-bottom: 2px solid var(--danger);
+  cursor: pointer;
+}
+.err-card-item {
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.risk-bar-track {
+  height: 6px; background: rgba(255,255,255,.07);
+  border-radius: 3px; overflow: hidden;
+}
+.risk-bar-fill { height: 100%; border-radius: 3px; transition: width .8s ease; }
+.tl-dot-new {
+  width: 10px; height: 10px; background: var(--warning);
+  border-radius: 50%; box-shadow: 0 0 0 3px rgba(245,158,11,.2);
+}
+.tl-dot-normal {
+  width: 10px; height: 10px; background: var(--accent);
+  border-radius: 50%; box-shadow: 0 0 0 3px rgba(14,165,233,.15);
+}
+.badge-new {
+  font-size: 10px; padding: 2px 7px;
+  background: rgba(245,158,11,.12); color: var(--warning);
+  border-radius: 99px; font-weight: 600;
+}
+.badge-rag {
+  font-size: 10px; padding: 2px 7px;
+  background: rgba(14,165,233,.12); color: var(--accent);
+  border-radius: 99px; font-weight: 600; letter-spacing: .04em;
+}
+.badge-done {
+  font-size: 10px; padding: 2px 7px;
+  background: rgba(34,197,94,.1); color: var(--success);
+  border-radius: 99px; font-weight: 600;
+}
+.badge-reviewing {
+  font-size: 10px; padding: 2px 7px;
+  background: rgba(245,158,11,.1); color: var(--warning);
+  border-radius: 99px; font-weight: 600;
+}
+.badge-error {
+  font-size: 10px; padding: 2px 7px;
+  background: rgba(239,68,68,.1); color: var(--danger);
+  border-radius: 99px; font-weight: 600;
+}
+.chip {
+  padding: 4px 12px; border-radius: 99px;
+  font-size: 11px; font-weight: 500; cursor: pointer;
+  transition: all .15s; display: inline-flex; align-items: center;
+}
+.chip-active {
+  background: rgba(14,165,233,.15); border: 1px solid rgba(14,165,233,.35);
+  color: var(--accent);
+}
+.chip-inactive {
+  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.08);
+  color: var(--text-3);
+}
+.chip-inactive:hover { border-color: rgba(255,255,255,.18); color: var(--text); }
+
+/* raw <button>/<input> 마크업용 (Quasar 아닌 순수 HTML — 이름 충돌 없음) */
+.btn-primary {
+  padding: 10px 20px;
+  background: linear-gradient(135deg,#0ea5e9,#0369a1);
+  border: none; border-radius: 9px;
+  font-size: 13px; font-weight: 600; color: #fff; cursor: pointer;
+  font-family: var(--font-sans); transition: opacity .2s; letter-spacing: -.01em;
+}
+.btn-primary:hover { opacity: .85; }
+.btn-secondary {
+  padding: 8px 16px;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px; font-size: 12px; font-weight: 500; color: var(--text-2);
+  cursor: pointer; font-family: var(--font-sans); transition: all .15s;
+}
+.btn-secondary:hover { background: rgba(255,255,255,.09); color: var(--text); }
+.inp {
+  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.1);
+  border-radius: 9px; padding: 10px 14px; font-size: 13px; color: var(--text);
+  font-family: var(--font-sans); outline: none; width: 100%;
+  transition: border-color .15s;
+}
+.inp:focus { border-color: rgba(14,165,233,.4); }
+.inp::placeholder { color: var(--text-4); }
+textarea.inp { resize: none; line-height: 1.6; }
+select.inp { cursor: pointer; color-scheme: dark; }
+select.inp option { background: var(--bg-elev); color: var(--text); }
+
+/* ─────────────────────────────────────────────────────────
    Generic panel helpers used by ported panels
    ───────────────────────────────────────────────────────── */
 .section-card {

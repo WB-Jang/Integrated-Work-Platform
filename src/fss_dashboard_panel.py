@@ -203,8 +203,8 @@ def build_fss_dashboard_panel(config: dict):
     if not fss_api_key:
         with ui.element('div').style(
             'margin:16px 32px;padding:12px 16px;'
-            'background:#fef3c7;border:1px solid #d97706;border-radius:8px;'
-            'font-size:13px;color:#92400e;'
+            'background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);border-radius:8px;'
+            'font-size:13px;color:var(--warning);'
         ):
             ui.html(
                 '<b>⚠ FSS API 키 미설정</b> — config.json의 <code>fss_api_key</code> 값을 입력하면 '
@@ -287,10 +287,10 @@ def build_fss_dashboard_panel(config: dict):
         dashboard_grid.clear()
         with dashboard_grid:
             icon_map = {
-                "제재·조치 현황":    ("gavel",           "#dc2626"),
-                "금융사고 공시":    ("warning",          "#d97706"),
-                "검사·감독 결과":   ("manage_search",    "#1d4ed8"),
-                "금융회사 경영공시": ("domain",           "#166534"),
+                "제재·조치 현황":    ("gavel",           "#ef4444"),
+                "금융사고 공시":    ("warning",          "#f59e0b"),
+                "검사·감독 결과":   ("manage_search",    "#3b82f6"),
+                "금융회사 경영공시": ("domain",           "#22c55e"),
             }
             for category, items in data.items():
                 icon_name, icon_color = icon_map.get(category, ("info", "var(--text-3)"))
@@ -351,7 +351,7 @@ def build_fss_dashboard_panel(config: dict):
             log.error("대시보드 조회 오류: %s", e)
             ui.notify(f'조회 오류: {e}', type='negative', position='top')
             last_updated_label.content = (
-                '<span style="color:#b91c1c;font-size:12px;">조회 실패</span>'
+                '<span style="color:var(--danger);font-size:12px;">조회 실패</span>'
             )
         finally:
             progress_bar.visible = False
@@ -363,10 +363,10 @@ def build_fss_dashboard_panel(config: dict):
     with dashboard_grid:
         for category in _ENDPOINTS:
             icon_map = {
-                "제재·조치 현황":    ("gavel",           "#dc2626"),
-                "금융사고 공시":    ("warning",          "#d97706"),
-                "검사·감독 결과":   ("manage_search",    "#1d4ed8"),
-                "금융회사 경영공시": ("domain",           "#166534"),
+                "제재·조치 현황":    ("gavel",           "#ef4444"),
+                "금융사고 공시":    ("warning",          "#f59e0b"),
+                "검사·감독 결과":   ("manage_search",    "#3b82f6"),
+                "금융회사 경영공시": ("domain",           "#22c55e"),
             }
             icon_name, icon_color = icon_map.get(category, ("info", "var(--text-3)"))
             with ui.element('div').style(

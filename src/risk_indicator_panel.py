@@ -132,19 +132,21 @@ def _get_bank_indicators(api_key: str, bank_code: str) -> dict:
 # ─── UI 헬퍼 ─────────────────────────────────────────────────────────────────
 def _eval_status(ind: dict, value: float) -> tuple[str, str]:
     """지표 값이 정상/주의/위험 중 어디인지 판정. (status, color) 반환."""
+    # 리터럴 hex 유지 — _indicator_card_html 이 "{color}1a" 로 알파값을 이어붙여
+    # 배지 배경을 만들기 때문에 var(--x) 는 여기서 쓸 수 없다.
     if ind["good"] == "up":
         if value < ind["danger"]:
-            return ("위험", "#dc2626")
+            return ("위험", "#ef4444")
         if value < ind["warn"]:
             return ("주의", "#f59e0b")
-        return ("양호", "#16a34a")
+        return ("양호", "#22c55e")
     if ind["good"] == "down":
         if value > ind["danger"]:
-            return ("위험", "#dc2626")
+            return ("위험", "#ef4444")
         if value > ind["warn"]:
             return ("주의", "#f59e0b")
-        return ("양호", "#16a34a")
-    return ("표시", "#64748b")  # neutral
+        return ("양호", "#22c55e")
+    return ("표시", "#94a3b8")  # neutral
 
 
 def _format_value(v, unit: str) -> str:
@@ -165,7 +167,7 @@ def _indicator_card_html(ind: dict, value: float, prev: float | None = None) -> 
             (ind["good"] == "up" and diff > 0)
             or (ind["good"] == "down" and diff < 0)
         )
-        d_color = "#16a34a" if good else ("#dc2626" if diff != 0 else "#64748b")
+        d_color = "var(--success)" if good else ("var(--danger)" if diff != 0 else "var(--text-3)")
         delta_html = (
             f'<span style="font-size:12px;color:{d_color};font-weight:500;">'
             f'{arrow} {abs(pct):.2f}%</span>'
@@ -222,9 +224,9 @@ def build_risk_indicator_panel(config: dict):
 
     # 데이터 출처 안내
     src_msg = (
-        '<span style="color:#16a34a;">FSS Open API 연동</span>'
+        '<span style="color:var(--success);">FSS Open API 연동</span>'
         if has_real_data else
-        '<span style="color:#0284c7;">샘플 데이터 표시 중</span> · 실데이터 연동 대기 (FSS_API_KEY 설정 필요)'
+        '<span style="color:var(--accent);">샘플 데이터 표시 중</span> · 실데이터 연동 대기 (FSS_API_KEY 설정 필요)'
     )
     ui.html(
         f'<div style="font-size:11.5px;color:var(--text-4);margin:-6px 0 10px;">'
@@ -467,7 +469,7 @@ def _svg_line_chart(title: str, keys: list[str], series: dict, quarters: list[st
     plot_w = W - PAD_L - PAD_R
     plot_h = H - PAD_T - PAD_B
 
-    colors = ["#0a0a0a", "#0284c7", "#7c3aed", "#16a34a", "#dc2626"]
+    colors = ["#f1f5f9", "#0ea5e9", "#a78bfa", "#22c55e", "#ef4444"]
 
     # 전체 데이터 범위
     all_vals = []
@@ -496,11 +498,11 @@ def _svg_line_chart(title: str, keys: list[str], series: dict, quarters: list[st
         val = vmax - g * span / 4
         grid.append(
             f'<line x1="{PAD_L}" y1="{y:.1f}" x2="{W - PAD_R}" y2="{y:.1f}" '
-            f'stroke="#e7e5e4" stroke-width="1" />'
+            f'stroke="rgba(255,255,255,.1)" stroke-width="1" />'
         )
         grid.append(
             f'<text x="{PAD_L - 4}" y="{y + 3:.1f}" font-size="9" '
-            f'text-anchor="end" fill="#9ca3af">{val:.1f}</text>'
+            f'text-anchor="end" fill="rgba(148,163,184,.6)">{val:.1f}</text>'
         )
 
     # X축 분기 라벨 (시작/중간/끝 정도만)
@@ -509,7 +511,7 @@ def _svg_line_chart(title: str, keys: list[str], series: dict, quarters: list[st
     for i in label_idx:
         xlabels.append(
             f'<text x="{_x(i):.1f}" y="{H - 8}" font-size="9" '
-            f'text-anchor="middle" fill="#9ca3af">{_html.escape(quarters[i])}</text>'
+            f'text-anchor="middle" fill="rgba(148,163,184,.6)">{_html.escape(quarters[i])}</text>'
         )
 
     # 시리즈 라인
