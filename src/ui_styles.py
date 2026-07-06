@@ -189,6 +189,24 @@ html body #main-nav * {
   font-size: 15px; vertical-align: -3px; margin-right: 4px;
 }
 
+/* 서브탭 — 문서분석/요약/Q&A 등의 "실행/결과" 전환 바 */
+.sub-tab-bar {
+  display: flex; gap: 4px;
+  padding: 10px 32px 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sub-tab {
+  font-family: var(--font-sans);
+  background: transparent !important; border: none; cursor: pointer;
+  padding: 6px 14px; font-size: 11.5px; font-weight: 500;
+  color: var(--text-3); border-radius: 6px 6px 0 0;
+  transition: all .15s; white-space: nowrap;
+  box-shadow: none !important; outline: 0 !important;
+}
+.sub-tab:hover { color: var(--text) !important; background: rgba(255,255,255,.05) !important; }
+.sub-tab.active { color: var(--accent) !important; background: rgba(14,165,233,.1) !important; }
+
 .nav-status {
   display: flex; align-items: center; gap: 10px;
   flex-shrink: 0; margin-left: 12px;

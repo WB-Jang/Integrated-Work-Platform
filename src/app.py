@@ -1134,10 +1134,19 @@ def main_page(request: Request):
                         )
                 return ''.join(parts)
 
-            with ui.element('div').classes('split'):
+            # ── 서브탭: 분석 실행 / 분석 결과 (IWP-Redesign-B) ──────────────
+            with ui.element('div').classes('sub-tab-bar'):
+                subtab_exec_btn = ui.element('button').classes('sub-tab active')
+                with subtab_exec_btn:
+                    ui.html('분석 실행')
+                subtab_result_btn = ui.element('button').classes('sub-tab')
+                with subtab_result_btn:
+                    ui.html('분석 결과')
+
+            with ui.element('div').classes('split') as split_el:
 
                 # ── LEFT pane — 업로드 + 파일 목록 + 미리보기 ─────────────
-                with ui.element('div').classes('pane'):
+                with ui.element('div').classes('pane') as left_pane_el:
                     with ui.element('div').classes('pane-head'):
                         ui.html(
                             '<span class="material-symbols-outlined" '
@@ -1176,72 +1185,95 @@ def main_page(request: Request):
                             '</div>'
                         )
                     with ui.element('div').classes('pane-body'):
-                        analysis_llm_chunk = ui.checkbox(
-                            'LLM 의미 단위 청킹 사용 (OFF: 볼드체 기반)',
-                            value=False,
-                        ).classes('check-row')
+                        with ui.element('div') as actions_el:
+                            analysis_llm_chunk = ui.checkbox(
+                                'LLM 의미 단위 청킹 사용 (OFF: 볼드체 기반)',
+                                value=False,
+                            ).classes('check-row')
 
-                        ui.html(
-                            '<div style="font-size:11px;font-weight:600;color:var(--text-3);'
-                            'letter-spacing:.03em;text-transform:uppercase;margin-bottom:8px;">'
-                            '선택 파일 분석</div>'
-                        )
-                        with ui.element('div').classes('action-row'):
-                            btn_proof = ui.button('오타 검수').classes('btn-primary-mono')
-                            btn_style = ui.button('Business Tone&Manner').classes('btn-primary-mono')
-
-                        ui.html('<div class="divider" style="margin:12px 0;"></div>')
-
-                        ui.html(
-                            '<div style="font-size:11px;font-weight:600;color:var(--text-3);'
-                            'letter-spacing:.03em;text-transform:uppercase;margin-bottom:8px;">'
-                            '논리 검증</div>'
-                        )
-                        with ui.element('div').classes('action-row'):
-                            btn_logic_single = ui.button('파일별 논리검증').classes('btn-primary-mono')
-                            btn_logic_all    = ui.button('전체 논리검증').classes('btn-primary-mono')
-
-                        status_label = ui.html('')
-
-                        # ── 결과 탭 (오타 검수 / 논리 검증 / Business Tone&Manner) ──
-                        ui.html('<div class="divider" style="margin:12px 0 8px;"></div>')
-                        with ui.element('div').style(
-                            'display:flex;align-items:center;justify-content:space-between;'
-                            'margin-bottom:8px;gap:8px;'
-                        ):
                             ui.html(
                                 '<div style="font-size:11px;font-weight:600;color:var(--text-3);'
-                                'letter-spacing:.03em;text-transform:uppercase;">분석 결과</div>'
+                                'letter-spacing:.03em;text-transform:uppercase;margin-bottom:8px;">'
+                                '선택 파일 분석</div>'
                             )
-                            btn_download_results = ui.button('결과 다운로드 (DOCX)') \
-                                .classes('btn-primary-mono').props('dense') \
-                                .props('title="선택한 파일의 완료된 분석 결과를 DOCX로 내려받습니다"')
-                        with ui.element('div').style(
-                            'display:flex;gap:4px;border-bottom:1px solid var(--border);'
-                            'margin-bottom:10px;'
-                        ) as _tabs_row:
-                            arefs['tab_row'] = _tabs_row
-                            arefs['tab_btns'] = {}
-                            for _k, _label, _fg, _bg in ANALYSIS_META:
-                                _tb = ui.element('button').style(
-                                    'background:transparent;border:none;border-bottom:2px solid transparent;'
-                                    'padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;'
-                                    'color:var(--text-3);transition:all .15s;'
-                                )
-                                with _tb:
-                                    ui.html(f'<span>{_label}</span>')
-                                arefs['tab_btns'][_k] = _tb
-                                _tb.on('click', lambda _e, kk=_k: _switch_analysis_tab(kk))
+                            with ui.element('div').classes('action-row'):
+                                btn_proof = ui.button('오타 검수').classes('btn-primary-mono')
+                                btn_style = ui.button('Business Tone&Manner').classes('btn-primary-mono')
 
-                        # 미리보기 5000자 제한 안내
-                        ui.html(
-                            '<div style="font-size:11px;color:var(--text-4);'
-                            'margin-bottom:8px;line-height:1.5;">'
-                            '※ 좌측 미리보기는 앞 5,000자만 표시되지만, 분석은 문서 전체에 대해 수행됩니다. '
-                            '5,000자를 넘는 위치의 수정 사항은 아래 결과 카드의 원문/수정 텍스트로 확인하세요.'
-                            '</div>'
-                        )
-                        results_container = ui.column().classes('w-full')
+                            ui.html('<div class="divider" style="margin:12px 0;"></div>')
+
+                            ui.html(
+                                '<div style="font-size:11px;font-weight:600;color:var(--text-3);'
+                                'letter-spacing:.03em;text-transform:uppercase;margin-bottom:8px;">'
+                                '논리 검증</div>'
+                            )
+                            with ui.element('div').classes('action-row'):
+                                btn_logic_single = ui.button('파일별 논리검증').classes('btn-primary-mono')
+                                btn_logic_all    = ui.button('전체 논리검증').classes('btn-primary-mono')
+
+                            status_label = ui.html('')
+
+                        # ── 결과 탭 (오타 검수 / 논리 검증 / Business Tone&Manner) ──
+                        with ui.element('div').style('display:none;') as results_wrap_el:
+                            ui.html('<div class="divider" style="margin:12px 0 8px;"></div>')
+                            with ui.element('div').style(
+                                'display:flex;align-items:center;justify-content:space-between;'
+                                'margin-bottom:8px;gap:8px;'
+                            ):
+                                ui.html(
+                                    '<div style="font-size:11px;font-weight:600;color:var(--text-3);'
+                                    'letter-spacing:.03em;text-transform:uppercase;">분석 결과</div>'
+                                )
+                                btn_download_results = ui.button('결과 다운로드 (DOCX)') \
+                                    .classes('btn-primary-mono').props('dense') \
+                                    .props('title="선택한 파일의 완료된 분석 결과를 DOCX로 내려받습니다"')
+                            with ui.element('div').style(
+                                'display:flex;gap:4px;border-bottom:1px solid var(--border);'
+                                'margin-bottom:10px;'
+                            ) as _tabs_row:
+                                arefs['tab_row'] = _tabs_row
+                                arefs['tab_btns'] = {}
+                                for _k, _label, _fg, _bg in ANALYSIS_META:
+                                    _tb = ui.element('button').style(
+                                        'background:transparent;border:none;border-bottom:2px solid transparent;'
+                                        'padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;'
+                                        'color:var(--text-3);transition:all .15s;'
+                                    )
+                                    with _tb:
+                                        ui.html(f'<span>{_label}</span>')
+                                    arefs['tab_btns'][_k] = _tb
+                                    _tb.on('click', lambda _e, kk=_k: _switch_analysis_tab(kk))
+
+                            # 미리보기 5000자 제한 안내
+                            ui.html(
+                                '<div style="font-size:11px;color:var(--text-4);'
+                                'margin-bottom:8px;line-height:1.5;">'
+                                '※ 좌측 미리보기는 앞 5,000자만 표시되지만, 분석은 문서 전체에 대해 수행됩니다. '
+                                '5,000자를 넘는 위치의 수정 사항은 아래 결과 카드의 원문/수정 텍스트로 확인하세요.'
+                                '</div>'
+                            )
+                            results_container = ui.column().classes('w-full')
+
+            def _switch_analysis_subtab(key: str):
+                """'분석 실행'/'분석 결과' 서브탭 전환 — 목업의 sub-tab 패턴.
+
+                실제 데이터·상태(파일별 캐시된 분석 결과, 탭 선택 등)는 그대로
+                유지한 채 화면 표시 영역만 토글한다. '결과' 탭에서는 좌측
+                업로드 패널과 우측 실행 버튼을 숨기고 결과 영역을 전체 폭으로
+                넓혀서 목업의 전용 결과 화면과 동일한 느낌을 준다.
+                """
+                is_result = (key == 'result')
+                for btn, active in ((subtab_exec_btn, not is_result), (subtab_result_btn, is_result)):
+                    btn.classes(add='active' if active else '', remove='' if active else 'active')
+                left_pane_el.style(f'display:{"none" if is_result else "flex"};')
+                actions_el.style(f'display:{"none" if is_result else "block"};')
+                results_wrap_el.style(f'display:{"block" if is_result else "none"};')
+                split_el.style(
+                    f'grid-template-columns:{"1fr" if is_result else "1fr 1fr"};'
+                )
+
+            subtab_exec_btn.on('click', lambda _e: _switch_analysis_subtab('exec'))
+            subtab_result_btn.on('click', lambda _e: _switch_analysis_subtab('result'))
 
             def _switch_analysis_tab(tab_key: str):
                 """우측 탭 전환: active tab 변경 후 좌측 미리보기와 우측 결과 갱신."""
@@ -1481,6 +1513,7 @@ def main_page(request: Request):
                             + annotated_html + '</div>'
                         )
                         render_results(results_container, file_errors)
+                        _switch_analysis_subtab('result')
 
                 try:
                     if analysis_llm_chunk.value:
