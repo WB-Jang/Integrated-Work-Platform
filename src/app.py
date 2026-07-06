@@ -551,17 +551,8 @@ _HOME_SUGGESTIONS = [
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Sidebar (모노크롬 라이트, 224px)
-# ──────────────────────────────────────────────────────────────────────────────
-def _nav_item_html(icon: str, label: str) -> str:
-    return (
-        f'<span class="material-symbols-outlined nav-icon">{icon}</span>'
-        f'<span class="nav-label">{label}</span>'
-    )
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Sidebar — Vue 컴포넌트 nest 잔상 제거를 위해 정적 HTML 단일 블록 + JS 위임 방식
+# Top nav bar (다크, IWP-Redesign-B) — Vue 컴포넌트 nest 잔상 제거를 위해
+# 정적 HTML 단일 블록 + JS 위임 방식 (사이드바 시절과 동일한 패턴 유지)
 #
 # 기존: 각 nav-item을 개별 ui.element('div')로 mount → 각각 Vue 컴포넌트 인스턴스
 #       발생, 동적 inline style이 cascade에서 우리 CSS를 이기는 잔상 문제
@@ -595,77 +586,32 @@ _NAV_AGENT = ('agent', 'AI 에이전트', 'smart_toy')
 _LLM_TAB_KEYS = {'home', 'analysis', 'summary', 'qa', 'legal', 'outlook', 'regulatory', 'agent'}
 
 
-def _build_sidebar_nav_html() -> str:
-    """사이드바 내부 HTML 정적 블록 생성 (로고 + 모든 nav-item + 그룹 라벨/토글/sub)."""
-    parts = [
-        '<div class="sidebar-logo">'
-        '<span class="logo-mark">IW</span>'
-        '<span class="logo-text">Integrated Work Platform</span>'
-        '<span class="beta-tag">BETA</span>'
-        '</div>',
+def _top_tab_html(key: str, label: str, icon: str, active: bool = False) -> str:
+    cls = 'top-tab active' if active else 'top-tab'
+    return (
+        f'<button class="{cls}" id="tab-{key}" data-nav-key="{key}">'
+        f'<span class="material-symbols-outlined">{icon}</span>{label}'
+        f'</button>'
+    )
 
-        # 홈
-        f'<div class="nav-item active" data-nav-key="{_NAV_HOME[0]}">'
-        f'{_nav_item_html(_NAV_HOME[2], _NAV_HOME[1])}'
-        f'</div>',
 
-        # AI 에이전트 (채팅 기반 앱 제어 — PoC)
-        f'<div class="nav-item" data-nav-key="{_NAV_AGENT[0]}">'
-        f'{_nav_item_html(_NAV_AGENT[2], _NAV_AGENT[1])}'
-        f'</div>',
+def _build_top_nav_html() -> str:
+    """상단 가로 탭바(#main-nav) 내부 HTML 정적 블록 생성.
 
-        # LLM 그룹
-        '<div class="nav-group-label" data-group-label="llm">LLM 기능</div>',
-        '<div class="nav-item expanded" data-group-toggle="llm" style="cursor:pointer;">'
-        '<span class="material-symbols-outlined nav-icon">smart_toy</span>'
-        '<span class="nav-label">LLM 도구</span>'
-        '<span class="material-symbols-outlined nav-chev">chevron_right</span>'
-        '</div>',
-        '<div class="nav-sub open" data-group-sub="llm">',
-    ]
+    IWP-Redesign-B 목업의 flat top-tab 구조를 따른다 — 사이드바 시절의
+    그룹 라벨/토글/서브메뉴는 없고, 모든 탭이 한 줄에 나열되며
+    가로 스크롤로 넘친 항목을 확인한다 (nav-wheel 핸들러가 세로 휠을
+    가로 스크롤로 변환).
+    """
+    parts = [_top_tab_html(_NAV_HOME[0], _NAV_HOME[1], _NAV_HOME[2], active=True)]
+    parts.append(_top_tab_html(_NAV_AGENT[0], _NAV_AGENT[1], _NAV_AGENT[2]))
     for key, label, icon in _NAV_LLM:
-        parts.append(
-            f'<div class="nav-item" data-nav-key="{key}">'
-            f'{_nav_item_html(icon, label)}'
-            f'</div>'
-        )
-    parts.append('</div>')
-
-    # 업무 그룹
-    parts.append('<div class="nav-group-label" data-group-label="business">업무</div>')
+        parts.append(_top_tab_html(key, label, icon))
     for key, label, icon in _NAV_BIZ:
-        parts.append(
-            f'<div class="nav-item" data-nav-key="{key}">'
-            f'{_nav_item_html(icon, label)}'
-            f'</div>'
-        )
-
-    # DashBoard 그룹
-    parts.append('<div class="nav-group-label" data-group-label="dashboard">DashBoard</div>')
-    parts.append(
-        '<div class="nav-item expanded" data-group-toggle="dashboard" style="cursor:pointer;">'
-        '<span class="material-symbols-outlined nav-icon">dashboard</span>'
-        '<span class="nav-label">DashBoard</span>'
-        '<span class="material-symbols-outlined nav-chev">chevron_right</span>'
-        '</div>'
-    )
-    parts.append('<div class="nav-sub open" data-group-sub="dashboard">')
+        parts.append(_top_tab_html(key, label, icon))
     for key, label, icon in _NAV_DASH:
-        parts.append(
-            f'<div class="nav-item" data-nav-key="{key}">'
-            f'{_nav_item_html(icon, label)}'
-            f'</div>'
-        )
-    parts.append('</div>')
-
-    # 관리자
-    parts.append('<div class="nav-group-label" data-group-label="admin">관리자</div>')
-    parts.append(
-        f'<div class="nav-item" data-nav-key="{_NAV_ADMIN[0]}">'
-        f'{_nav_item_html(_NAV_ADMIN[2], _NAV_ADMIN[1])}'
-        f'</div>'
-    )
-
+        parts.append(_top_tab_html(key, label, icon))
+    parts.append(_top_tab_html(_NAV_ADMIN[0], _NAV_ADMIN[1], _NAV_ADMIN[2]))
     return '\n'.join(parts)
 
 
@@ -787,7 +733,9 @@ def main_page(request: Request):
              user_initials, client_ip, session_dir)
 
     # ──────────────────────────────────────────────────────────────────────
-    # SIDEBAR — 정적 HTML 블록 + 숨겨진 트리거 버튼 + JS event delegation
+    # TOP NAV — 정적 HTML 블록(#main-nav) + 숨겨진 트리거 버튼 + JS event delegation
+    # (design/design-full-change: 좌측 사이드바 → 상단 가로 탭바로 교체.
+    #  그룹 라벨/토글/서브메뉴 개념은 폐지 — 모든 탭이 한 줄에 flat 하게 나열된다.)
     # ──────────────────────────────────────────────────────────────────────
     # 모든 nav-key
     _ALL_NAV_KEYS = (
@@ -800,23 +748,30 @@ def main_page(request: Request):
 
     # nav_elements: admin_panel과의 API 호환을 위한 proxy (실제 DOM은 정적 HTML)
     nav_elements: dict = {
-        k: _NavProxy(f'.sidebar [data-nav-key="{k}"]') for k in _ALL_NAV_KEYS
+        k: _NavProxy(f'#main-nav [data-nav-key="{k}"]') for k in _ALL_NAV_KEYS
     }
 
-    with ui.element('aside').classes('sidebar'):
-        # ── 정적 HTML 블록: 로고 + 모든 nav-item + 그룹 라벨/토글/sub ────
-        ui.html(_build_sidebar_nav_html(), sanitize=False)
+    with ui.element('header').classes('top-nav-header'):
+        ui.html(
+            '<div class="nav-logo">'
+            '<span class="logo-mark sg">IW</span>'
+            '<div><div class="logo-title sg">IWP</div>'
+            '<div class="logo-sub">통합업무플랫폼</div></div>'
+            '<span class="beta-tag">BETA</span>'
+            '</div>'
+        )
 
-        # ── Footer — 모델 선택 + 현재 사용자 표시 ──────────────────────────
-        with ui.element('div').classes('sidebar-footer'):
-            ui.html('<div class="footer-label">LLM 모델</div>')
+        with ui.element('nav').props('id=main-nav'):
+            ui.html(_build_top_nav_html(), sanitize=False)
+
+        with ui.element('div').classes('nav-status'):
             model_select = ui.select(
                 options=list(MODEL_OPTIONS.keys()),
                 value=_DEFAULT_MODEL,
             ).props(
                 'dense outlined hide-bottom-space dark options-dense '
                 'behavior="menu" popup-content-class="model-select-menu"'
-            ).classes('model-select-q w-full')
+            ).classes('model-select-q').style('min-width:160px;')
 
             def _on_model_change(e):
                 set_current_user(state.get('user_initials', '-'))
@@ -827,21 +782,21 @@ def main_page(request: Request):
 
             # 사용자 칩 (접속 IP 기반 자동 식별 — 수동 로그인/로그아웃 없음)
             user_chip = ui.element('div').style(
-                'display:flex;align-items:center;gap:8px;margin-top:10px;'
-                'padding:6px 8px;background:rgba(255,255,255,0.05);border-radius:8px;'
-                'font-size:11.5px;'
+                'display:flex;align-items:center;gap:6px;'
+                'padding:4px 10px;background:rgba(255,255,255,.05);border-radius:6px;'
+                'font-size:11px;'
             )
             with user_chip:
                 ui.html(
                     '<span class="material-symbols-outlined" '
-                    'style="font-size:14px;color:var(--text-3, #9ca3af);">person</span>'
-                    f'<span style="color:var(--text-2, #d4d4d4);flex:1;" '
+                    'style="font-size:14px;color:var(--text-3);">person</span>'
+                    f'<span style="color:var(--text-2);" '
                     f'title="접속 IP: {_html.escape(client_ip)}">'
                     f'{_html.escape(user_initials)}</span>'
                 )
 
     # ── Hidden 트리거 버튼: 각 nav-key에 대해 Python 콜백 연결 ────────────
-    # JS event delegation이 nav-item 클릭 → 해당 트리거 버튼 click() 호출 →
+    # JS event delegation이 top-tab 클릭 → 해당 트리거 버튼 click() 호출 →
     # NiceGUI on('click') 핸들러 발화 → switch_tab(key) 실행.
     nav_triggers: dict = {}
     with ui.element('div').style('display:none;') as trigger_container:
@@ -850,57 +805,56 @@ def main_page(request: Request):
             _btn = ui.element('button').props(f'id=_nav_trigger_{_k} type=button')
             nav_triggers[_k] = _btn
 
-    # nav_groups (admin_panel 호환 proxy)
+    # nav_groups (admin_panel 호환 proxy) — flat 탭바에는 그룹 헤더 DOM이 없으므로
+    # 아래 selector는 항상 빈 NodeList를 대상으로 하는 무해한 no-op 이다.
+    # (admin_panel의 "그룹 전체 숨기기" 기능은 개별 nav_elements[key].visible = False
+    #  로만 실효를 가진다.)
     nav_group_proxies = {
         'llm': {
-            'label':  _NavProxy('.sidebar [data-group-label="llm"]'),
-            'toggle': _NavProxy('.sidebar [data-group-toggle="llm"]'),
-            'sub':    _NavProxy('.sidebar [data-group-sub="llm"]'),
+            'label':  _NavProxy('[data-group-label="llm"]'),
+            'toggle': _NavProxy('[data-group-toggle="llm"]'),
+            'sub':    _NavProxy('[data-group-sub="llm"]'),
         },
         'business': {
-            'label':  _NavProxy('.sidebar [data-group-label="business"]'),
+            'label':  _NavProxy('[data-group-label="business"]'),
         },
         'dashboard': {
-            'label':  _NavProxy('.sidebar [data-group-label="dashboard"]'),
-            'toggle': _NavProxy('.sidebar [data-group-toggle="dashboard"]'),
-            'sub':    _NavProxy('.sidebar [data-group-sub="dashboard"]'),
+            'label':  _NavProxy('[data-group-label="dashboard"]'),
+            'toggle': _NavProxy('[data-group-toggle="dashboard"]'),
+            'sub':    _NavProxy('[data-group-sub="dashboard"]'),
         },
     }
 
-    # ── JS event delegation: 사이드바 클릭 라우터 ────────────────────────
-    # · [data-group-toggle] 클릭 → 해당 sub.open 토글 + 토글 자체 .expanded 토글
-    # · [data-nav-key]      클릭 → hidden 트리거 #_nav_trigger_<key> .click()
+    # ── JS event delegation: 상단 탭바 클릭 라우터 + 세로 휠 → 가로 스크롤 ──
     ui.add_body_html('''
 <script>
 (function(){
-  function bindSidebar(){
-    const sb = document.querySelector('aside.sidebar');
-    if (!sb) { setTimeout(bindSidebar, 100); return; }
-    if (sb.dataset.delegated === '1') return;
-    sb.dataset.delegated = '1';
-    sb.addEventListener('click', function(e){
-      const toggle = e.target.closest('[data-group-toggle]');
-      if (toggle && sb.contains(toggle)) {
-        const g = toggle.getAttribute('data-group-toggle');
-        const sub = sb.querySelector('[data-group-sub="' + g + '"]');
-        if (sub) sub.classList.toggle('open');
-        toggle.classList.toggle('expanded');
-        e.stopPropagation();
-        return;
-      }
+  function bindTopNav(){
+    const nav = document.getElementById('main-nav');
+    if (!nav) { setTimeout(bindTopNav, 100); return; }
+    if (nav.dataset.delegated === '1') return;
+    nav.dataset.delegated = '1';
+    nav.addEventListener('click', function(e){
       const item = e.target.closest('[data-nav-key]');
-      if (item && sb.contains(item)) {
+      if (item && nav.contains(item)) {
         const k = item.getAttribute('data-nav-key');
         const trig = document.getElementById('_nav_trigger_' + k);
         if (trig) trig.click();
       }
     });
-    console.info('[IPM] sidebar click delegation bound');
+    // 세로 휠 스크롤을 가로 스크롤로 변환 (탭이 화면 폭을 넘칠 때)
+    nav.addEventListener('wheel', function(e){
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        nav.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }
+    }, { passive: false });
+    console.info('[IPM] top-nav click delegation bound');
   }
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', bindSidebar);
+    document.addEventListener('DOMContentLoaded', bindTopNav);
   } else {
-    bindSidebar();
+    bindTopNav();
   }
 })();
 </script>
@@ -2002,16 +1956,18 @@ def main_page(request: Request):
                 _ge.visible = False
 
     # ──────────────────────────────────────────────────────────────────────
-    # 탭 전환 — nav-item .active 클래스는 정적 HTML이므로 JS로 토글
+    # 탭 전환 — top-tab .active 클래스는 정적 HTML이므로 JS로 토글
     # ──────────────────────────────────────────────────────────────────────
     def switch_tab(key):
         state['current_tab'] = key
-        # JS로 .active 클래스 토글 (사이드바 정적 HTML이라 Python에서 직접 조작 불가)
+        # JS로 .active 클래스 토글 (상단 탭바가 정적 HTML이라 Python에서 직접 조작 불가)
         ui.run_javascript(
-            "document.querySelectorAll('.sidebar [data-nav-key]').forEach("
+            "document.querySelectorAll('#main-nav [data-nav-key]').forEach("
             "el => el.classList.remove('active'));"
-            f"const t = document.querySelector('.sidebar [data-nav-key=\"{key}\"]');"
+            f"const t = document.querySelector('#main-nav [data-nav-key=\"{key}\"]');"
             "if (t) t.classList.add('active');"
+            f"const el = document.getElementById('tab-{key}'); if (el) el.scrollIntoView("
+            "{behavior:'smooth', inline:'center', block:'nearest'});"
         )
         for k, p in panels.items():
             p.style(f'display: {"flex" if k == key else "none"};')

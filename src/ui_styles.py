@@ -1,9 +1,10 @@
 """
-Integrated Work Platform — Monochrome UX Design System
+Integrated Work Platform — Dark UX Design System (design/design-full-change)
 
 NiceGUI 전용 글로벌 CSS 주입 모듈.
-검정·회색·흰색 기반 모노크롬 팔레트, Pretendard + Material Symbols,
-풀-블리드 채팅 / 분할 레이아웃을 위한 클래스들을 정의합니다.
+Claude Design "IWP-Redesign-B" 목업을 기준으로 한 다크 네이비 팔레트
+(bg #050b14, sky-blue accent #0ea5e9) + Noto Sans KR/Space Grotesk +
+상단 가로 탭바 레이아웃을 위한 클래스들을 정의합니다.
 
 사용법:
     from ui_styles import inject_global_css
@@ -25,41 +26,46 @@ html body,
 .q-app,
 .q-page-container,
 .body--light {
-  --q-primary: #171717 !important;
-  --q-secondary: #404040 !important;
-  --q-accent: #0a0a0a !important;
-  --q-dark: #0a0a0a !important;
-  --q-dark-page: #ffffff !important;
-  --q-positive: #166534 !important;
-  --q-negative: #b91c1c !important;
-  --q-info: #404040 !important;
-  --q-warning: #92400e !important;
+  --q-primary: #0ea5e9 !important;
+  --q-secondary: #0369a1 !important;
+  --q-accent: #0ea5e9 !important;
+  --q-dark: #050b14 !important;
+  --q-dark-page: #050b14 !important;
+  --q-positive: #22c55e !important;
+  --q-negative: #ef4444 !important;
+  --q-info: #0ea5e9 !important;
+  --q-warning: #f59e0b !important;
 }
 
 /* ─────────────────────────────────────────────────────────
-   Design tokens (light)
+   Design tokens (dark — IWP-Redesign-B)
    ───────────────────────────────────────────────────────── */
 :root {
-  --bg: #ffffff;
-  --bg-elev: #fafaf9;
-  --bg-sunken: #f5f5f4;
-  --border: #e7e5e4;
-  --border-strong: #d6d3d1;
-  --text: #0a0a0a;
-  --text-2: #404040;
-  --text-3: #737373;
-  --text-4: #a3a3a3;
-  --accent: #171717;
-  --accent-hover: #000000;
-  --shadow-sm: 0 1px 2px rgba(0,0,0,.04);
-  --shadow-md: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --bg: #050b14;
+  --bg-elev: #0b1524;
+  --bg-sunken: #030710;
+  --border: rgba(255,255,255,.07);
+  --border-strong: rgba(255,255,255,.16);
+  --text: #f1f5f9;
+  --text-2: rgba(148,163,184,.9);
+  --text-3: rgba(148,163,184,.6);
+  --text-4: rgba(148,163,184,.35);
+  --accent: #0ea5e9;
+  --accent-hover: #38bdf8;
+  --accent-2: #0369a1;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.24);
+  --shadow-md: 0 1px 3px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.28);
   --radius-sm: 6px;
   --radius: 8px;
   --radius-lg: 12px;
   --radius-full: 999px;
-  --sidebar-w: 248px;
-  --font-sans: "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI",
-    "Noto Sans KR", sans-serif;
+  --topnav-h: 58px;
+  --font-sans: "Noto Sans KR", "Pretendard", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-display: "Space Grotesk", "Noto Sans KR", sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -73,6 +79,7 @@ html, body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
+.sg { font-family: var(--font-display); }
 
 /* NiceGUI/Quasar 기본 폰트 오버라이드 */
 body, .q-field, .q-btn, input, textarea, select, button {
@@ -82,342 +89,180 @@ body, .q-field, .q-btn, input, textarea, select, button {
 .material-symbols-outlined {
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
 }
-
-/* ─────────────────────────────────────────────────────────
-   Sidebar  (dark charcoal)
-   ───────────────────────────────────────────────────────── */
-:root {
-  --sidebar-bg:        #22252a;
-  --sidebar-border:    rgba(255,255,255,.08);
-  --sidebar-text:      rgba(255,255,255,.72);
-  --sidebar-text-dim:  rgba(255,255,255,.38);
-  --sidebar-hover:     rgba(255,255,255,.07);
-  --sidebar-active:    rgba(255,255,255,.13);
-  --sidebar-logo-bg:   #ffffff;
-  --sidebar-logo-fg:   #22252a;
-}
-
-.sidebar {
-  position: fixed; top: 0; left: 0;
-  width: var(--sidebar-w);
-  height: 100vh;
-  background: var(--sidebar-bg);
-  border-right: 1px solid var(--sidebar-border);
-  display: flex; flex-direction: column;
-  padding: 16px 12px;
-  overflow-y: auto;
-  z-index: 10;
+/* 버그 수정 — 위 button/.q-btn 규칙의 font-family !important 가 그 안에 중첩된
+   material-symbols-outlined span 까지 덮어써 아이콘이 리가처(ligature)로
+   렌더링되지 못하고 "home"/"attach_file" 같은 원본 텍스트로 보이는 문제.
+   (top-tab 버튼화로 새로 노출됐지만 button/.q-btn 안 아이콘 전반에 있던
+   기존 버그.) 아이콘 폰트 패밀리를 다시 강제 복원.
+   (family 이름은 material-symbols-local.css 의 'Material Symbols Outlined Local'
+   과 반드시 일치시킬 것 — NiceGUI 가 등록하는 동명 원격 폰트와의 충돌 회피.) */
+button .material-symbols-outlined,
+.q-btn .material-symbols-outlined,
+input.material-symbols-outlined,
+select.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined Local' !important;
 }
 
 /* ─────────────────────────────────────────────────────────
-   사이드바 — hover/click 시 보이던 박스 잔상 차단
-
-   원인 분석 (사용자 보고: hover/click 시에만 나타남):
-   1. -webkit-tap-highlight-color 브라우저 기본값(반투명 검정)이
-      어두운 사이드바 위에서 옅은 회색 박스로 보임
-   2. transition 으로 인한 GPU 합성 paint layer artifact
-   3. Quasar의 q-focus-helper / q-ripple overlay
-
-   해결: 사이드바 내부 모든 자손의 hover/focus/active 상태에서
-   background / box-shadow / outline / tap-highlight 를 모두 제거.
+   Top nav bar (IWP-Redesign-B — 가로 스크롤 탭바, 사이드바 대체)
    ───────────────────────────────────────────────────────── */
-
-/* 1) Tap highlight (모바일 + 일부 데스크톱 브라우저) 차단 */
-html body .sidebar,
-html body .sidebar * {
-  -webkit-tap-highlight-color: transparent !important;
-  -webkit-touch-callout: none !important;
-}
-
-/* 2) 모든 hover/focus/active/focus-within 상태에서 시각 효과 차단 */
-html body .sidebar *:hover,
-html body .sidebar *:focus,
-html body .sidebar *:focus-visible,
-html body .sidebar *:focus-within,
-html body .sidebar *:active {
-  background-color: transparent !important;
-  background-image: none !important;
-  box-shadow: none !important;
-  outline: 0 !important;
-  outline-color: transparent !important;
-}
-
-/* 3) nav-item 의 모든 상태 — background 완전 차단, color 변경만 허용 */
-html body .sidebar .nav-item,
-html body .sidebar .nav-item:hover,
-html body .sidebar .nav-item:focus,
-html body .sidebar .nav-item:focus-visible,
-html body .sidebar .nav-item:focus-within,
-html body .sidebar .nav-item:active,
-html body .sidebar .nav-item.active,
-html body .sidebar .nav-item.expanded {
-  background: transparent !important;
-  background-color: transparent !important;
-  background-image: none !important;
-  box-shadow: none !important;
-  outline: 0 !important;
-  border: 0 !important;
-}
-
-/* 4) nav-item 안의 자식 요소도 모두 동일 처리 */
-html body .sidebar .nav-item *,
-html body .sidebar .nav-item *:hover,
-html body .sidebar .nav-item *:focus,
-html body .sidebar .nav-item *:active {
-  background-color: transparent !important;
-  background-image: none !important;
-  box-shadow: none !important;
-}
-
-/* 5) Quasar overlay 완전 차단 */
-html body .sidebar .q-focus-helper,
-html body .sidebar .q-ripple,
-html body .sidebar .q-hoverable__bg,
-html body .sidebar .q-focus-helper:before,
-html body .sidebar .q-focus-helper:after {
-  display: none !important;
-  background: transparent !important;
-  opacity: 0 !important;
-}
-
-/* 6) 사이드바 모든 요소 transition 완전 제거 + outline/border 강제 0
-       (진단 결과 hover 시 시각적 박스를 만들 수 있는 유일한 변화가
-        color 변경 + transition 이었음. transition 으로 인한 GPU paint
-        artifact를 차단하기 위해 transition을 완전히 끔.) */
-html body .sidebar,
-html body .sidebar *,
-html body .sidebar ::before,
-html body .sidebar ::after {
-  transition: none !important;
-  outline-width: 0 !important;
-  outline-style: none !important;
-  outline-color: transparent !important;
-  border-width: 0 !important;
-  box-shadow: none !important;
-  filter: none !important;
-  backdrop-filter: none !important;
-  -webkit-filter: none !important;
-}
-
-/* active 상태의 좌측 인디케이터(::before)는 위 규칙으로 사라졌을 수 있으니
-   indicator 전용 규칙으로 복원 (높은 specificity로 위 와일드카드 덮어쓰기) */
-html body aside.sidebar .nav-item.active::before {
-  content: "" !important;
-  position: absolute !important;
-  left: 0 !important;
-  top: 50% !important;
-  transform: translateY(-50%) !important;
-  height: 18px !important;
-  width: 2px !important;
-  background: #ffffff !important;
-  border-radius: 2px !important;
-}
-.sidebar-logo {
-  display: flex; align-items: center; gap: 8px;
-  padding: 4px 8px 16px;
-  font-size: 13px; font-weight: 600;
-  letter-spacing: -0.01em; color: #ffffff;
-  min-width: 0;
-}
-.sidebar-logo .logo-mark {
-  width: 22px; height: 22px; border-radius: 6px;
-  background: var(--sidebar-logo-bg); color: var(--sidebar-logo-fg);
-  display: grid; place-items: center;
-  font-size: 11px; font-weight: 700; letter-spacing: -.02em;
+.top-nav-header {
+  height: var(--topnav-h);
+  background: rgba(5,11,20,.97);
+  border-bottom: 1px solid rgba(14,165,233,.1);
+  display: flex; align-items: center;
+  padding: 0 28px;
   flex-shrink: 0;
+  position: relative; z-index: 30;
+  backdrop-filter: blur(20px);
 }
-.sidebar-logo .logo-text {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1; min-width: 0;
-  font-size: 12.5px;
+.nav-logo {
+  display: flex; align-items: center; gap: 9px;
+  margin-right: 32px; flex-shrink: 0;
+}
+.nav-logo .logo-mark {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: linear-gradient(135deg,#0ea5e9,#0369a1);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; color: #fff; font-size: 13px; font-weight: 700;
+}
+.nav-logo .logo-title {
+  font-size: 13px; font-weight: 700; color: var(--text);
+  letter-spacing: .02em; line-height: 1.2;
+}
+.nav-logo .logo-sub {
+  font-size: 9px; color: var(--text-4); letter-spacing: .08em;
 }
 .beta-tag {
   display: inline-flex; align-items: center;
   padding: 2px 6px;
   font-size: 9.5px; font-weight: 600; letter-spacing: .04em;
-  color: var(--sidebar-text-dim);
+  color: var(--text-3);
   background: rgba(255,255,255,.06);
-  border: 1px solid var(--sidebar-border);
+  border: 1px solid var(--border);
   border-radius: var(--radius-full);
   flex-shrink: 0;
+  margin-left: 6px;
 }
-.sidebar-divider {
-  height: 1px; background: var(--sidebar-border); margin: 8px 4px;
+
+/* 1) Tap highlight 차단 (사이드바 시절 잔상 이슈 재발 방지 — 상단 탭바에도 유지) */
+html body #main-nav,
+html body #main-nav * {
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-touch-callout: none !important;
 }
-.nav-group-label {
-  font-size: 10.5px; font-weight: 600;
-  color: var(--sidebar-text-dim);
-  padding: 12px 10px 6px;
-  letter-spacing: .06em;
-  text-transform: uppercase;
+
+#main-nav {
+  display: flex; height: var(--topnav-h);
+  align-items: stretch;
+  overflow-x: auto; overflow-y: hidden;
+  flex: 1;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
 }
-/* ─────────────────────────────────────────────────────────
-   Sidebar — nav items
-   (active 상태도 사이드바 배경과 완전 동일한 톤을 유지하기 위해
-    배경 오버레이 없이 글자 밝기 + 좌측 액센트 바로만 표시)
-   ───────────────────────────────────────────────────────── */
-html body .sidebar .nav-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 10px;
-  border-radius: 0;
+#main-nav::-webkit-scrollbar { height: 3px; }
+#main-nav::-webkit-scrollbar-track { background: transparent; }
+#main-nav::-webkit-scrollbar-thumb { background: rgba(14,165,233,.3); border-radius: 2px; }
+
+.top-tab {
+  font-family: var(--font-sans);
   background: transparent !important;
-  color: var(--sidebar-text);
-  font-size: 13px; font-weight: 500;
-  cursor: pointer;
+  border: none; cursor: pointer;
+  padding: 0 16px; height: 100%;
+  font-size: 12.5px; font-weight: 500;
+  color: var(--text-3);
   position: relative;
-  /* transition 제거 — GPU paint artifact 방지 */
-  user-select: none;
+  transition: color .15s;
+  white-space: nowrap; letter-spacing: -.01em;
+  flex-shrink: 0;
+  box-shadow: none !important;
+  outline: 0 !important;
 }
-/* hover 시 색 변경 제거 — 진단 결과 이 변화가 박스 잔상의 원인.
-   클릭한 항목(.active)만 흰색으로 강조됨. cursor:pointer 가 시각적 affordance 제공. */
-html body .sidebar .nav-item:hover {
-  background: transparent !important;
-  color: var(--sidebar-text) !important;
+.top-tab:hover { color: var(--text) !important; }
+.top-tab.active { color: var(--accent) !important; }
+.top-tab.active::after {
+  content: '';
+  position: absolute; bottom: 0; left: 16px; right: 16px;
+  height: 2px; background: var(--accent); border-radius: 1px;
 }
-html body .sidebar .nav-item:hover .nav-icon {
-  color: var(--sidebar-text) !important;
+.top-tab .material-symbols-outlined {
+  font-size: 15px; vertical-align: -3px; margin-right: 4px;
 }
-html body .sidebar .nav-item.active {
-  background: transparent !important;
-  color: #ffffff;
-  font-weight: 600;
-}
-html body .sidebar .nav-item.active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  height: 18px;
-  width: 2px;
-  border-radius: 2px;
-  background: #ffffff;
-}
-html body .sidebar .nav-item .nav-icon {
-  font-size: 18px; line-height: 1; flex-shrink: 0;
-  color: var(--sidebar-text);
-  transition: color .12s;
-  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
-}
-html body .sidebar .nav-item:hover .nav-icon,
-html body .sidebar .nav-item.active .nav-icon {
-  color: #ffffff;
-}
-html body .sidebar .nav-item.active .nav-icon {
-  font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 20;
-}
-html body .sidebar .nav-item .nav-label {
-  flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-html body .sidebar .nav-item .nav-chev {
-  font-size: 16px; color: var(--sidebar-text-dim);
-  transition: transform .2s;
-}
-html body .sidebar .nav-item.expanded .nav-chev { transform: rotate(90deg); }
-html body .sidebar .nav-sub {
-  overflow: hidden; max-height: 0;
-  transition: max-height .22s cubic-bezier(.4,0,.2,1);
-}
-html body .sidebar .nav-sub.open { max-height: 320px; }
-html body .sidebar .nav-sub .nav-item { padding-left: 36px; font-size: 12.5px; }
-html body .sidebar .nav-sub .nav-item .nav-icon { font-size: 15px; }
 
-.sidebar-footer {
-  margin-top: auto;
-  padding-top: 14px;
-  border-top: 1px solid var(--sidebar-border);
+.nav-status {
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0; margin-left: 12px;
 }
-.sidebar-footer .footer-label {
-  font-size: 11px; color: var(--sidebar-text-dim); padding: 0 4px 6px;
+.model-badge {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 10px;
+  background: rgba(34,197,94,.06);
+  border: 1px solid rgba(34,197,94,.18);
+  border-radius: 6px;
 }
-.model-select {
-  width: 100%;
-  appearance: none;
-  background: rgba(255,255,255,.08);
-  border: 1px solid var(--sidebar-border);
-  border-radius: var(--radius);
-  padding: 8px 28px 8px 10px;
-  font-size: 12.5px;
-  color: #ffffff;
-  cursor: pointer;
-  font-family: inherit;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23aaaaaa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
+.model-badge .dot {
+  width: 5px; height: 5px; background: var(--success);
+  border-radius: 50%; animation: pulse 2s infinite;
 }
-.model-select:hover { border-color: rgba(255,255,255,.2); }
+.model-badge span { font-size: 10px; color: var(--success); font-weight: 500; }
+@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.35;} }
 
-/* ui.select (Quasar) — 다크 사이드바 풋터용 (모델 선택)
-   사이드바 안에서만 적용되도록 .sidebar 로 스코프하여
-   본문 다른 select 와 격리. */
-.sidebar .model-select-q.q-field { font-family: var(--font-sans) !important; }
-
-.sidebar .model-select-q .q-field__control,
-.sidebar .model-select-q .q-field__control * {
+/* 모델 선택 드롭다운 (구 sidebar-footer 위치 → 상단 우측으로 이동) */
+.model-select-q.q-field { font-family: var(--font-sans) !important; }
+.model-select-q .q-field__control,
+.model-select-q .q-field__control * {
   background-color: transparent !important;
   background-image: none !important;
 }
-.sidebar .model-select-q .q-field__control {
+.model-select-q .q-field__control {
   background-color: rgba(255,255,255,.06) !important;
-  border: 1px solid rgba(255,255,255,.12) !important;
+  border: 1px solid var(--border-strong) !important;
   border-radius: var(--radius) !important;
-  min-height: 36px !important;
+  min-height: 34px !important;
   padding: 0 12px !important;
   box-shadow: none !important;
   transition: border-color .12s, background-color .12s !important;
 }
-.sidebar .model-select-q .q-field__control::before,
-.sidebar .model-select-q .q-field__control::after { display: none !important; }
-.sidebar .model-select-q .q-field__control:hover {
+.model-select-q .q-field__control::before,
+.model-select-q .q-field__control::after { display: none !important; }
+.model-select-q .q-field__control:hover {
   background-color: rgba(255,255,255,.10) !important;
-  border-color: rgba(255,255,255,.20) !important;
+  border-color: rgba(14,165,233,.3) !important;
 }
-.sidebar .model-select-q.q-field--focused .q-field__control {
+.model-select-q.q-field--focused .q-field__control {
   background-color: rgba(255,255,255,.12) !important;
-  border-color: rgba(255,255,255,.30) !important;
+  border-color: rgba(14,165,233,.4) !important;
 }
-
-/* 선택된 값 텍스트 — 모든 가능한 셀렉터 강제 white */
-.sidebar .model-select-q,
-.sidebar .model-select-q .q-field__native,
-.sidebar .model-select-q .q-field__native *,
-.sidebar .model-select-q .q-field__input,
-.sidebar .model-select-q .q-select__input-value,
-.sidebar .model-select-q .q-select__display-value,
-.sidebar .model-select-q .q-field__control-container,
-.sidebar .model-select-q .q-field__control-container *,
-.sidebar .model-select-q [class*="q-field__"],
-.sidebar .model-select-q [class*="q-select__"] {
-  color: #ffffff !important;
-  -webkit-text-fill-color: #ffffff !important;
+.model-select-q,
+.model-select-q .q-field__native,
+.model-select-q .q-field__native *,
+.model-select-q .q-field__input,
+.model-select-q .q-select__input-value,
+.model-select-q .q-select__display-value,
+.model-select-q .q-field__control-container,
+.model-select-q .q-field__control-container *,
+.model-select-q [class*="q-field__"],
+.model-select-q [class*="q-select__"] {
+  color: var(--text) !important;
+  -webkit-text-fill-color: var(--text) !important;
   font-size: 12.5px !important;
   font-weight: 500 !important;
 }
-.sidebar .model-select-q .q-field__native {
-  min-height: 34px !important;
-  padding: 0 !important;
-}
+.model-select-q .q-field__native { min-height: 32px !important; padding: 0 !important; }
+.model-select-q .q-field__label { display: none !important; }
+.model-select-q .q-field__append,
+.model-select-q .q-field__append * { color: var(--text-3) !important; }
 
-/* floating label 비활성화 (label 없이 사용) */
-.sidebar .model-select-q .q-field__label { display: none !important; }
-
-/* dropdown arrow */
-.sidebar .model-select-q .q-field__append,
-.sidebar .model-select-q .q-field__append * { color: rgba(255,255,255,.6) !important; }
-
-/* ───── 드롭다운 메뉴 (popup) — 다크 톤으로 통일 ───── */
 .q-menu.model-select-menu {
-  background: #2a2d33 !important;
-  border: 1px solid rgba(255,255,255,.12) !important;
+  background: var(--bg-elev) !important;
+  border: 1px solid var(--border-strong) !important;
   border-radius: var(--radius) !important;
-  box-shadow: 0 12px 28px rgba(0,0,0,.4), 0 2px 6px rgba(0,0,0,.3) !important;
+  box-shadow: 0 12px 28px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.4) !important;
   padding: 4px !important;
   margin-top: 4px !important;
 }
 .q-menu.model-select-menu .q-item {
-  color: rgba(255,255,255,.85) !important;
+  color: var(--text-2) !important;
   font-size: 12.5px !important;
   font-family: var(--font-sans) !important;
   min-height: 32px !important;
@@ -428,8 +273,8 @@ html body .sidebar .nav-sub .nav-item .nav-icon { font-size: 15px; }
 .q-menu.model-select-menu .q-item:hover,
 .q-menu.model-select-menu .q-item--active,
 .q-menu.model-select-menu .q-item.q-manual-focusable--focused {
-  background: rgba(255,255,255,.10) !important;
-  color: #ffffff !important;
+  background: rgba(14,165,233,.1) !important;
+  color: var(--text) !important;
 }
 .q-menu.model-select-menu .q-item__label { color: inherit !important; }
 
@@ -528,7 +373,8 @@ html body .sidebar .nav-sub .nav-item .nav-icon { font-size: 15px; }
   border-radius: var(--radius-lg) !important;
   border: 1px solid var(--border) !important;
   box-shadow: var(--shadow-md) !important;
-  background: var(--bg) !important;
+  background: var(--bg-elev) !important;
+  color: var(--text) !important;
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -683,8 +529,8 @@ html body .sidebar .nav-sub .nav-item .nav-icon { font-size: 15px; }
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--text-4);
 }
-.server-row .dot.up { background: #16a34a; }
-.server-row .dot.down { background: #dc2626; }
+.server-row .dot.up { background: var(--success); }
+.server-row .dot.down { background: var(--danger); }
 
 /* Two-column flexible layout (filter / result) */
 .filter-result-row {
@@ -729,8 +575,7 @@ html body .sidebar .nav-sub .nav-item .nav-icon { font-size: 15px; }
    Main area & panels
    ───────────────────────────────────────────────────────── */
 .main-area {
-  margin-left: var(--sidebar-w);
-  height: 100vh;
+  height: calc(100vh - var(--topnav-h));
   display: flex; flex-direction: column;
   overflow: hidden;
 }
@@ -997,7 +842,7 @@ html body .sidebar .nav-sub .nav-item .nav-icon { font-size: 15px; }
    를 명시.
    ───────────────────────────────────────────────────────── */
 
-/* ── GLOBAL DEFAULT (모든 q-btn) — 흰 버튼 ── */
+/* ── GLOBAL DEFAULT (모든 q-btn) — 다크 카드 버튼(.btn-secondary 상당) ── */
 html body .q-btn,
 html body .q-btn.q-btn--standard,
 html body .q-btn.q-btn--standard.q-btn--actionable,
@@ -1008,11 +853,11 @@ html body .q-btn.q-btn--standard.q-btn--actionable.bg-primary,
 html body .q-btn.q-btn--standard.q-btn--actionable.q-btn--rectangle.bg-primary,
 html body .q-btn.text-white,
 html body .q-btn.q-btn--standard.text-white {
-  background: #ffffff !important;
-  background-color: #ffffff !important;
+  background: rgba(255,255,255,.05) !important;
+  background-color: rgba(255,255,255,.05) !important;
   background-image: none !important;
-  color: #0a0a0a !important;
-  border: 1px solid #e7e5e4 !important;
+  color: var(--text-2) !important;
+  border: 1px solid var(--border-strong) !important;
   border-radius: 8px !important;
   text-transform: none !important;
   font-family: var(--font-sans) !important;
@@ -1028,10 +873,10 @@ html body .q-btn:hover,
 html body .q-btn.q-btn--standard:hover,
 html body .q-btn.q-btn--standard.q-btn--actionable:hover,
 html body .q-btn.q-btn--standard.q-btn--actionable.bg-primary:hover {
-  background: #fafaf9 !important;
-  background-color: #fafaf9 !important;
-  border-color: #d6d3d1 !important;
-  color: #0a0a0a !important;
+  background: rgba(255,255,255,.09) !important;
+  background-color: rgba(255,255,255,.09) !important;
+  border-color: var(--border-strong) !important;
+  color: var(--text) !important;
 }
 html body .q-btn .q-btn__content {
   font-size: 13px !important;
@@ -1043,7 +888,7 @@ html body .q-btn[disabled],
 html body .q-btn.disabled,
 html body .q-btn--disable { opacity: 0.5 !important; }
 
-/* ── PRIMARY MONO — 검정 배경 + 흰 글자 ── */
+/* ── PRIMARY MONO — 스카이블루 그라디언트(.btn-primary 상당) ── */
 html body .q-btn.btn-primary-mono,
 html body .q-btn.q-btn--standard.btn-primary-mono,
 html body .q-btn.q-btn--standard.q-btn--actionable.btn-primary-mono,
@@ -1054,22 +899,21 @@ html body .q-btn.q-btn--standard.q-btn--actionable.btn-primary-mono.bg-primary,
 html body .q-btn.q-btn--standard.q-btn--actionable.q-btn--rectangle.btn-primary-mono.bg-primary,
 html body .q-btn.btn-primary-mono.text-white,
 html body .q-btn.q-btn--standard.btn-primary-mono.text-white {
-  background: #0a0a0a !important;
-  background-color: #0a0a0a !important;
-  background-image: none !important;
+  background: linear-gradient(135deg,#0ea5e9,#0369a1) !important;
+  background-color: #0ea5e9 !important;
+  background-image: linear-gradient(135deg,#0ea5e9,#0369a1) !important;
   color: #ffffff !important;
-  border: 1px solid #0a0a0a !important;
+  border: none !important;
   min-height: 34px !important;
   padding: 0 14px !important;
   font-size: 13px !important;
+  font-weight: 600 !important;
 }
 html body .q-btn.btn-primary-mono:hover,
 html body .q-btn.q-btn--standard.btn-primary-mono:hover,
 html body .q-btn.q-btn--standard.q-btn--actionable.btn-primary-mono:hover,
 html body .q-btn.q-btn--standard.q-btn--actionable.btn-primary-mono.bg-primary:hover {
-  background: #000000 !important;
-  background-color: #000000 !important;
-  border-color: #000000 !important;
+  opacity: .85 !important;
   color: #ffffff !important;
 }
 html body .q-btn.btn-primary-mono .q-btn__content,
@@ -1078,7 +922,7 @@ html body .q-btn.q-btn--standard.btn-primary-mono .q-btn__content {
   color: #ffffff !important;
 }
 
-/* ── SECONDARY MONO — 흰 배경 + 검정 글자 + 회색 보더 ── */
+/* ── SECONDARY MONO — 다크 카드 배경 + 밝은 글자 + 보더 ── */
 html body .q-btn.btn-mono,
 html body .q-btn.q-btn--standard.btn-mono,
 html body .q-btn.q-btn--standard.q-btn--actionable.btn-mono,
@@ -1089,11 +933,11 @@ html body .q-btn.q-btn--standard.q-btn--actionable.btn-mono.bg-primary,
 html body .q-btn.q-btn--standard.q-btn--actionable.q-btn--rectangle.btn-mono.bg-primary,
 html body .q-btn.btn-mono.text-white,
 html body .q-btn.q-btn--standard.btn-mono.text-white {
-  background: #ffffff !important;
-  background-color: #ffffff !important;
+  background: rgba(255,255,255,.05) !important;
+  background-color: rgba(255,255,255,.05) !important;
   background-image: none !important;
-  color: #0a0a0a !important;
-  border: 1px solid #e7e5e4 !important;
+  color: var(--text-2) !important;
+  border: 1px solid var(--border-strong) !important;
   min-height: 34px !important;
   padding: 0 14px !important;
   font-size: 13px !important;
@@ -1102,15 +946,15 @@ html body .q-btn.btn-mono:hover,
 html body .q-btn.q-btn--standard.btn-mono:hover,
 html body .q-btn.q-btn--standard.q-btn--actionable.btn-mono:hover,
 html body .q-btn.q-btn--standard.q-btn--actionable.btn-mono.bg-primary:hover {
-  background: #fafaf9 !important;
-  background-color: #fafaf9 !important;
-  border-color: #d6d3d1 !important;
-  color: #0a0a0a !important;
+  background: rgba(255,255,255,.09) !important;
+  background-color: rgba(255,255,255,.09) !important;
+  border-color: rgba(14,165,233,.3) !important;
+  color: var(--text) !important;
 }
 html body .q-btn.btn-mono .q-btn__content,
 html body .q-btn.btn-mono .q-btn__content *,
 html body .q-btn.q-btn--standard.btn-mono .q-btn__content {
-  color: #0a0a0a !important;
+  color: inherit !important;
 }
 
 /* COMPACT — 작은 버튼 */
@@ -1136,16 +980,16 @@ html body .q-btn.q-btn--standard.btn-mono.is-active,
 html body .q-btn.q-btn--standard.q-btn--actionable.btn-mono.is-active,
 html body .q-btn.btn-mono.active,
 html body .q-btn.q-btn--standard.btn-mono.active {
-  background: #0a0a0a !important;
-  background-color: #0a0a0a !important;
-  color: #ffffff !important;
-  border-color: #0a0a0a !important;
+  background: rgba(14,165,233,.15) !important;
+  background-color: rgba(14,165,233,.15) !important;
+  color: var(--accent) !important;
+  border-color: rgba(14,165,233,.35) !important;
 }
 html body .q-btn.btn-mono.is-active .q-btn__content,
 html body .q-btn.btn-mono.is-active .q-btn__content *,
 html body .q-btn.btn-mono.active .q-btn__content,
 html body .q-btn.btn-mono.active .q-btn__content * {
-  color: #ffffff !important;
+  color: var(--accent) !important;
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -1170,9 +1014,9 @@ html body .q-btn.btn-mono.active .q-btn__content * {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--text-3);
 }
-.status-chip.ok .dot { background: #16a34a; }
-.status-chip.warn .dot { background: #d97706; }
-.status-chip.err .dot { background: #dc2626; }
+.status-chip.ok .dot { background: var(--success); }
+.status-chip.warn .dot { background: var(--warning); }
+.status-chip.err .dot { background: var(--danger); }
 .mem-bar {
   display: inline-flex; align-items: center; gap: 8px;
   font-size: 11.5px; color: var(--text-3);
@@ -1361,131 +1205,40 @@ html body .q-btn.btn-mono.active .q-btn__content * {
 """
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 사이드바 잔상 제거 — JS 런타임 강제 페인터
-# ─────────────────────────────────────────────────────────────────────────────
-# 배경:
-#   CSS specificity로는 NiceGUI 3.x / Quasar / Vue가 동적으로 추가하는
-#   wrapper 요소나 inline style이 cascade에서 이기는 경우가 발생.
-#   .nav-item 주위에 미세한 박스 잔상이 남는 문제가 어떤 CSS 조합으로도
-#   완전 해결되지 않아 JS 런타임에서 inline `style + !important` 로 강제.
-#
-# 동작:
-#   1) aside.sidebar 의 모든 자손에 대해 background-color를 #22252a 로,
-#      box-shadow / border / outline 을 모두 제거.
-#   2) 예외 셀렉터( .logo-mark / .beta-tag / Quasar 입력·드롭다운 내부 ) 는
-#      자체 디자인 유지.
-#   3) MutationObserver 로 NiceGUI가 나중에 mount 하는 자식까지 즉시 처리.
-#   4) 안전망으로 1초마다 한 번 더 전체 페인트 (성능 영향 미미, 멱등).
-#
-# 이 방식은 CSS specificity 와 무관하게 inline style + !important 로
-# 박히기 때문에 외부 CSS가 어떤 색을 시도하든 항상 이깁니다.
-_SIDEBAR_PAINT_JS = r"""
-(function() {
-  var BG = '#22252a';
-  function isExcluded(el) {
-    if (!el || el.nodeType !== 1 || !el.classList) return false;
-    if (el.classList.contains('logo-mark')) return true;
-    if (el.classList.contains('beta-tag')) return true;
-    if (el.classList.contains('material-symbols-outlined')) return true;
-    if (el.tagName === 'I' || el.tagName === 'SPAN' && el.classList.contains('material-symbols-outlined')) return true;
-    if (typeof el.closest === 'function') {
-      if (el.closest('.q-field__control')) return true;
-      if (el.closest('.q-menu')) return true;
-      if (el.closest('.q-select__dropdown-icon')) return true;
-      if (el.closest('.model-select-q')) return true;
-    }
-    return false;
-  }
-  function paint(el) {
-    if (!el || el.nodeType !== 1 || !el.style) return;
-    if (isExcluded(el)) return;
-    el.style.setProperty('background-color', BG, 'important');
-    el.style.setProperty('background-image', 'none', 'important');
-    el.style.setProperty('box-shadow', 'none', 'important');
-    el.style.setProperty('border-color', 'transparent', 'important');
-    el.style.setProperty('outline-color', 'transparent', 'important');
-  }
-  function paintAll() {
-    var sb = document.querySelector('aside.sidebar');
-    if (!sb) return false;
-    paint(sb);
-    var nodes = sb.querySelectorAll('*');
-    for (var i = 0; i < nodes.length; i++) paint(nodes[i]);
-    return true;
-  }
-  var painting = false;
-  function safePaintAll() {
-    if (painting) return;
-    painting = true;
-    try { paintAll(); }
-    finally { setTimeout(function(){ painting = false; }, 0); }
-  }
-  function start() {
-    if (!paintAll()) { setTimeout(start, 100); return; }
-    var sb = document.querySelector('aside.sidebar');
-    try {
-      // childList + subtree: 새 노드 추가 감지
-      // attributes(style/class): 동적 inline style 변경 감지 (hover/click 시 끼어드는 효과)
-      var mo = new MutationObserver(function(){ safePaintAll(); });
-      mo.observe(sb, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['style', 'class']
-      });
-    } catch (e) { console.warn('[IPM] MutationObserver setup failed:', e); }
-
-    // hover/click 시점에도 즉시 강제 재페인트 (잔상 차단의 핵심)
-    ['mouseover', 'mouseout', 'mousedown', 'mouseup', 'focusin', 'focusout', 'click']
-      .forEach(function(ev){
-        sb.addEventListener(ev, function(){
-          // 다음 프레임에 페인트 — 브라우저가 hover 효과를 적용한 직후 덮어씀
-          requestAnimationFrame(safePaintAll);
-        }, true);
-      });
-
-    // 안전망: 1초 주기 멱등 페인트
-    setInterval(safePaintAll, 1000);
-    console.info('[IPM] sidebar paint enforcer started — bg locked to', BG);
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', start);
-  } else {
-    start();
-  }
-})();
-"""
-
-
 def inject_global_css():
-    """Pretendard + Material Symbols + 모노크롬 디자인 토큰을 주입합니다.
+    """Noto Sans KR/Space Grotesk + Material Symbols + 다크 디자인 토큰을 주입합니다.
 
     Quasar 의 CSS가 head 끝쪽에 로드되므로, 우리 스타일이 cascade 에서 이기도록
     head 와 body 양쪽에 모두 주입합니다. (body 끝에 들어간 <style>이 가장
     마지막에 적용됨.)
+
+    구 버전(v27)의 사이드바 전용 "JS paint enforcer"는 상단 탭바 전환과 함께
+    제거했습니다 — 정적 ui.html() 블록 + 이벤트 위임 패턴은 사이드바 때와
+    동일하게 유지되므로 Quasar/Vue의 동적 wrapper가 nav 안에 끼어들 일이
+    구조적으로 없습니다. 잔상이 재발하면 원인은 다른 곳(nav 밖 컴포넌트)일
+    가능성이 높습니다.
     """
-    # 터미널에 버전 마커 출력 — 새 ui_styles 가 로드됐는지 즉시 확인 가능
-    print("\n[ui_styles] Monochrome Design System v3.0 loaded "
-          "(btn-mono = WHITE bg + black text, btn-primary-mono = BLACK bg + white text)\n")
+    print("\n[ui_styles] Dark Design System (design-full-change) loaded "
+          "(top nav, btn-primary-mono = sky-blue gradient, btn-mono = dark card)\n")
 
     ui.add_head_html(
         '<link rel="stylesheet" href="/static/fonts/pretendard-local.css">'
         '<link rel="stylesheet" href="/static/fonts/material-symbols-local.css">'
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700'
+        '&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">'
     )
     # head 에 1차 주입
     ui.add_head_html(
-        '<meta name="ipm-design-version" content="v3.0">'
-        f'<style id="ipm-global-styles-v27">{_GLOBAL_CSS}</style>'
+        '<meta name="ipm-design-version" content="dark-v1">'
+        f'<style id="ipm-global-styles-dark-v1">{_GLOBAL_CSS}</style>'
     )
     try:
         ui.add_body_html(
-            f'<style id="ipm-global-styles-v27-late">{_GLOBAL_CSS}</style>'
-            f'<script id="ipm-sidebar-paint">{_SIDEBAR_PAINT_JS}</script>'
-            '<script>console.info("[IPM] Design System v3.0 — JS sidebar paint enforcer active");</script>'
+            f'<style id="ipm-global-styles-dark-v1-late">{_GLOBAL_CSS}</style>'
         )
     except AttributeError:
         ui.add_head_html(
-            f'<style id="ipm-global-styles-v27-late">{_GLOBAL_CSS}</style>'
-            f'<script id="ipm-sidebar-paint">{_SIDEBAR_PAINT_JS}</script>'
+            f'<style id="ipm-global-styles-dark-v1-late">{_GLOBAL_CSS}</style>'
         )

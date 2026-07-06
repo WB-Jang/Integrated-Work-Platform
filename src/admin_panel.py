@@ -375,7 +375,7 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
                     )
 
                 use_llm_chunk_check = ui.checkbox(
-                    'LLM 의미 단위 청킹 사용 (사이드바에서 선택한 모델)', value=False,
+                    'LLM 의미 단위 청킹 사용 (상단 탭바에서 선택한 모델)', value=False,
                 )
                 ui.html(
                     '<div class="muted-text" style="margin-bottom:12px;">'
@@ -447,8 +447,8 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
                         return
 
                     use_llm = bool(use_llm_chunk_check.value)
-                    # LLM 청킹 모델을 하드코딩하지 않고, 채팅창(사이드바)에서 선택한
-                    # 모델·provider 로 수행하도록 config 에 주입한다.
+                    # LLM 청킹 모델을 하드코딩하지 않고, 상단 탭바 모델 선택창에서
+                    # 고른 모델·provider 로 수행하도록 config 에 주입한다.
                     llm_config = None
                     if use_llm:
                         llm_config = dict(config)
@@ -661,7 +661,7 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
             '<div>'
             '<div style="font-size:15px;font-weight:700;color:var(--text);">메뉴 관리</div>'
             '<div style="font-size:12px;color:var(--text-3);margin-top:2px;">'
-            '기능을 비활성화하면 사이드바에서 즉시 숨겨집니다. 변경 사항은 서버 재시작 후에도 유지됩니다.'
+            '기능을 비활성화하면 상단 탭바에서 즉시 숨겨집니다. 변경 사항은 서버 재시작 후에도 유지됩니다.'
             '</div>'
             '</div>'
             '</div>'

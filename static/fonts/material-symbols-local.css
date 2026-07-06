@@ -1,13 +1,18 @@
-/* Material Symbols Outlined - offline */
+/* Material Symbols Outlined - offline
+   font-family 를 NiceGUI/Quasar 가 별도로 등록하는 동명(同名) 원격 @font-face
+   (Google Fonts CDN, 오프라인/제한된 네트워크에서 로드 실패) 와 절대 겹치지
+   않도록 고유한 이름으로 등록한다. 두 @font-face 가 이름이 같으면 브라우저가
+   원격판을 선택했다가 로드 실패 시 아이콘이 리가처 없이 원본 텍스트
+   ("home", "attach_file" 등)로 렌더링되는 문제가 있었다. */
 @font-face {
-  font-family: 'Material Symbols Outlined';
+  font-family: 'Material Symbols Outlined Local';
   font-style: normal;
   font-weight: 100 700;
   font-display: block;
   src: url('/static/fonts/material-symbols-outlined.woff2') format('woff2');
 }
 .material-symbols-outlined {
-  font-family: 'Material Symbols Outlined';
+  font-family: 'Material Symbols Outlined Local';
   font-weight: normal;
   font-style: normal;
   font-size: 24px;
