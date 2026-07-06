@@ -1143,49 +1143,35 @@ def main_page(request: Request):
                 with subtab_result_btn:
                     ui.html('분석 결과')
 
-            with ui.element('div').classes('split') as split_el:
+            with ui.element('div').classes('split').style(
+                'grid-template-columns:360px 1fr;'
+            ) as split_el:
 
-                # ── LEFT pane — 업로드 + 파일 목록 + 미리보기 ─────────────
+                # ── LEFT pane — 업로드 + 파일 목록 + 분석 실행 설정 ────────
                 with ui.element('div').classes('pane') as left_pane_el:
                     with ui.element('div').classes('pane-head'):
                         ui.html(
                             '<span class="material-symbols-outlined" '
                             'style="font-size:18px;color:var(--text-2);">upload_file</span>'
                             '<div style="flex:1;">'
-                            '<h3>파일 업로드 및 목록</h3>'
+                            '<h3>파일 업로드 및 분석 실행</h3>'
                             '<div class="pane-sub">.docx · .pdf · .hwp · .hwpx (다중 업로드 가능)</div>'
                             '</div>'
                         )
                     with ui.element('div').classes('pane-body').style('display:flex; flex-direction:column;'):
-                        # 업로드 영역은 sticky로 고정 — 분석 후에도 항상 화면에 보임
+                        # 업로드 영역은 sticky로 고정 — 분석 후에도 항상 화면에 보임 (축소판)
                         with ui.element('div').classes('upload-sticky w-full'):
                             arefs['upload'] = ui.upload(
                                 auto_upload=True,
                                 multiple=True,
-                            ).props('accept=.docx,.pdf,.hwp,.hwpx flat bordered').classes('w-full')
+                            ).props('accept=.docx,.pdf,.hwp,.hwpx flat bordered').classes('w-full upload-compact')
 
                         arefs['file_list'] = ui.column().classes('w-full').style(
                             'gap:4px; margin-top:10px; margin-bottom:2px;'
                         )
-                        arefs['preview'] = ui.html(
-                            '<div class="preview-text">'
-                            '<span style="color:var(--text-4);">파일을 업로드하면 본문 미리보기가 표시됩니다.</span>'
-                            '</div>'
-                        )
 
-                # ── RIGHT pane — AI 분석 ───────────────────────────────
-                with ui.element('div').classes('pane'):
-                    with ui.element('div').classes('pane-head'):
-                        ui.html(
-                            '<span class="material-symbols-outlined" '
-                            'style="font-size:18px;color:var(--text-2);">psychology</span>'
-                            '<div style="flex:1;">'
-                            '<h3>AI 분석 실행</h3>'
-                            '<div class="pane-sub">섹션 단위로 LLM 검사가 진행됩니다</div>'
-                            '</div>'
-                        )
-                    with ui.element('div').classes('pane-body'):
                         with ui.element('div') as actions_el:
+                            ui.html('<div class="divider" style="margin:14px 0 12px;"></div>')
                             analysis_llm_chunk = ui.checkbox(
                                 'LLM 의미 단위 청킹 사용 (OFF: 볼드체 기반)',
                                 value=False,
@@ -1213,9 +1199,27 @@ def main_page(request: Request):
 
                             status_label = ui.html('')
 
+                # ── RIGHT pane — 문서 미리보기 / 분석 결과 ─────────────
+                with ui.element('div').classes('pane'):
+                    with ui.element('div').classes('pane-head'):
+                        ui.html(
+                            '<span class="material-symbols-outlined" '
+                            'style="font-size:18px;color:var(--text-2);">description</span>'
+                            '<div style="flex:1;">'
+                            '<h3>문서 미리보기</h3>'
+                            '<div class="pane-sub">섹션 단위로 LLM 검사가 진행됩니다</div>'
+                            '</div>'
+                        )
+                    with ui.element('div').classes('pane-body'):
+                        with ui.element('div') as preview_wrap_el:
+                            arefs['preview'] = ui.html(
+                                '<div class="preview-text">'
+                                '<span style="color:var(--text-4);">파일을 업로드하면 본문 미리보기가 표시됩니다.</span>'
+                                '</div>'
+                            )
+
                         # ── 결과 탭 (오타 검수 / 논리 검증 / Business Tone&Manner) ──
                         with ui.element('div').style('display:none;') as results_wrap_el:
-                            ui.html('<div class="divider" style="margin:12px 0 8px;"></div>')
                             with ui.element('div').style(
                                 'display:flex;align-items:center;justify-content:space-between;'
                                 'margin-bottom:8px;gap:8px;'
@@ -1259,17 +1263,17 @@ def main_page(request: Request):
 
                 실제 데이터·상태(파일별 캐시된 분석 결과, 탭 선택 등)는 그대로
                 유지한 채 화면 표시 영역만 토글한다. '결과' 탭에서는 좌측
-                업로드 패널과 우측 실행 버튼을 숨기고 결과 영역을 전체 폭으로
-                넓혀서 목업의 전용 결과 화면과 동일한 느낌을 준다.
+                업로드/실행 패널을 숨기고 결과 영역을 전체 폭으로 넓혀서
+                목업의 전용 결과 화면과 동일한 느낌을 준다.
                 """
                 is_result = (key == 'result')
                 for btn, active in ((subtab_exec_btn, not is_result), (subtab_result_btn, is_result)):
                     btn.classes(add='active' if active else '', remove='' if active else 'active')
                 left_pane_el.style(f'display:{"none" if is_result else "flex"};')
-                actions_el.style(f'display:{"none" if is_result else "block"};')
+                preview_wrap_el.style(f'display:{"none" if is_result else "block"};')
                 results_wrap_el.style(f'display:{"block" if is_result else "none"};')
                 split_el.style(
-                    f'grid-template-columns:{"1fr" if is_result else "1fr 1fr"};'
+                    f'grid-template-columns:{"1fr" if is_result else "360px 1fr"};'
                 )
 
             subtab_exec_btn.on('click', lambda _e: _switch_analysis_subtab('exec'))
@@ -2006,15 +2010,15 @@ def _build_summary_panel(parent, state):
                 '<div class="page-subtitle">계층적 Map-Reduce 방식으로 요약하거나 분량을 축약합니다.</div>'
                 '</div>'
             )
-        with ui.element('div').classes('split'):
-            # LEFT
+        with ui.element('div').classes('split').style('grid-template-columns:340px 1fr;'):
+            # LEFT — 업로드 + 요약 실행 설정
             with ui.element('div').classes('pane'):
                 with ui.element('div').classes('pane-head'):
                     ui.html(
                         '<span class="material-symbols-outlined" '
                         'style="font-size:18px;color:var(--text-2);">upload_file</span>'
                         '<div style="flex:1;">'
-                        '<h3>파일 업로드 및 미리보기</h3>'
+                        '<h3>파일 업로드 및 요약 실행</h3>'
                         '<div class="pane-sub">.docx · .pdf · .hwp · .hwpx</div>'
                         '</div>'
                     )
@@ -2070,39 +2074,23 @@ def _build_summary_panel(parent, state):
                         except Exception as exc:
                             ui.notify(f'업로드 오류: {exc}', type='negative', position='top')
 
-                    # 업로드 영역은 sticky로 고정 — 요약 후에도 항상 화면에 보임
+                    # 업로드 영역은 sticky로 고정 — 요약 후에도 항상 화면에 보임 (축소판)
                     with ui.element('div').classes('upload-sticky w-full'):
                         srefs['upload'] = ui.upload(
                             on_upload=handle_upload_summary,
                             auto_upload=True, max_files=1,
-                        ).props('accept=.docx,.pdf,.hwp,.hwpx flat bordered').classes('w-full')
+                        ).props('accept=.docx,.pdf,.hwp,.hwpx flat bordered').classes('w-full upload-compact')
                     srefs['file_card'] = ui.html('')
-                    srefs['preview'] = ui.html(
-                        '<div class="preview-text">'
-                        '<span style="color:var(--text-4);">파일을 업로드하면 미리보기가 표시됩니다.</span>'
-                        '</div>'
-                    )
 
                     def _reset_summary_upload_only():
                         """요약/축약 완료 후 업로드 위젯만 초기화하여 새 파일을 받을 수 있게 함.
-                        좌측의 파일 카드와 원문 미리보기는 유지하여 사용자가 원문을 계속 확인할 수 있도록 함."""
+                        우측의 파일 카드와 원문 미리보기는 유지하여 사용자가 원문을 계속 확인할 수 있도록 함."""
                         try:
                             srefs['upload'].reset()
                         except Exception:
                             pass
 
-            # RIGHT
-            with ui.element('div').classes('pane'):
-                with ui.element('div').classes('pane-head'):
-                    ui.html(
-                        '<span class="material-symbols-outlined" '
-                        'style="font-size:18px;color:var(--text-2);">summarize</span>'
-                        '<div style="flex:1;">'
-                        '<h3>분석 실행</h3>'
-                        '<div class="pane-sub">전체 요약 또는 분량 축약 (분량 축약 기능은 DOCX 다운로드 가능)</div>'
-                        '</div>'
-                    )
-                with ui.element('div').classes('pane-body'):
+                    ui.html('<div class="divider" style="margin:14px 0 12px;"></div>')
                     summary_llm_chunk = ui.checkbox(
                         'LLM 의미 단위 청킹 사용 (문서 요약 전용)', value=False,
                     ).classes('check-row')
@@ -2115,7 +2103,25 @@ def _build_summary_panel(parent, state):
                         btn_summary = ui.button('문서 요약').classes('btn-primary-mono')
                         btn_compress = ui.button('분량 축약').classes('btn-primary-mono')
                     summary_status = ui.html('')
-                    summary_result = ui.column().classes('w-full')
+
+            # RIGHT — 원문 미리보기 + 요약 결과
+            with ui.element('div').classes('pane'):
+                with ui.element('div').classes('pane-head'):
+                    ui.html(
+                        '<span class="material-symbols-outlined" '
+                        'style="font-size:18px;color:var(--text-2);">description</span>'
+                        '<div style="flex:1;">'
+                        '<h3>문서 미리보기</h3>'
+                        '<div class="pane-sub">전체 요약 또는 분량 축약 (분량 축약 기능은 DOCX 다운로드 가능)</div>'
+                        '</div>'
+                    )
+                with ui.element('div').classes('pane-body'):
+                    srefs['preview'] = ui.html(
+                        '<div class="preview-text">'
+                        '<span style="color:var(--text-4);">파일을 업로드하면 미리보기가 표시됩니다.</span>'
+                        '</div>'
+                    )
+                    summary_result = ui.column().classes('w-full').style('margin-top:16px;')
 
                     async def run_summary():
                         if not llm_status.guard():
