@@ -335,8 +335,38 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 '{ s.scrollTop = s.scrollHeight; });'
             )
 
+        def _stage_html(label: str) -> str:
+            return (
+                '<div class="msg ai">'
+                '<div class="msg-role"><span class="avatar">AI</span><span>어시스턴트</span></div>'
+                '<div class="msg-body" style="color:var(--text-3);display:flex;align-items:center;gap:8px;">'
+                '<span class="material-symbols-outlined" '
+                'style="font-size:16px;animation:spin 1.2s linear infinite;">progress_activity</span>'
+                f'{_html.escape(label)}</div>'
+                '</div>'
+            )
+
+        def _token_html(text: str) -> str:
+            safe = _html.escape(text).replace('\n', '<br>')
+            return (
+                '<div class="msg ai">'
+                '<div class="msg-role"><span class="avatar">AI</span><span>어시스턴트</span></div>'
+                f'<div class="msg-body">{safe}<span class="chat-cursor"></span></div>'
+                '</div>'
+            )
+
+        result = None
+        reply_parts: list[str] = []
         try:
-            result = await nicegui_run.io_bound(agent.search, query)
+            async for kind, payload in agent.search_streaming(query):
+                if kind == 'stage':
+                    loading_bubble.content = _stage_html(payload)
+                elif kind == 'token':
+                    reply_parts.append(payload)
+                    loading_bubble.content = _token_html(''.join(reply_parts))
+                    await asyncio.sleep(0)
+                elif kind == 'done':
+                    result = payload
         except Exception as exc:
             try:
                 loading_bubble.content = (
@@ -351,14 +381,15 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 pass
             return
 
-        # 로딩 버블 제거하고 실제 답변 추가
+        # 스트리밍 버블 제거하고 최종 답변(메타칩+참고 조항 카드 포함) 렌더링
         # ※ 사용자가 검색 중 '대화 초기화'를 누르거나 다른 do_search 가 chat_inner
         #    를 비웠다면 loading_bubble.delete() 가 ValueError 를 일으킴 → 안전 가드.
         try:
             loading_bubble.delete()
         except (ValueError, RuntimeError) as _del_exc:
             log.debug("loading_bubble 제거 스킵: %s", _del_exc)
-        _add_bot_bubble(result)
+        if result is not None:
+            _add_bot_bubble(result)
         _update_mem_status()
         activity_log.record('legal', query[:40], status='done')
 

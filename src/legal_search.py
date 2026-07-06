@@ -387,7 +387,7 @@ class LegalSearchAgent:
 
     # ─── 최종 답변 생성 ────────────────────────────────────────────
 
-    def _generate_answer(self, query: str, context_docs: list[str]) -> str:
+    def _build_answer_messages(self, query: str, context_docs: list[str]) -> list:
         context = "\n\n---\n\n".join(context_docs) if context_docs else "관련 조항을 찾지 못했습니다."
         no_rag = not context_docs
 
@@ -435,12 +435,26 @@ class LegalSearchAgent:
             human_content = f"[질문]\n{query}\n\n[관련 법률 조항]\n{context}"
 
         messages.append(HumanMessage(content=human_content))
+        return messages
 
+    def _generate_answer(self, query: str, context_docs: list[str]) -> str:
+        messages = self._build_answer_messages(query, context_docs)
         try:
             resp = self._get_summary_llm().invoke(messages)
             return getattr(resp, "content", None) or str(resp)
         except Exception as e:
             return f"[오류] 답변 생성 실패: {e}"
+
+    async def _astream_answer(self, query: str, context_docs: list[str]):
+        """답변을 토큰 단위로 스트리밍 — search_streaming() 전용."""
+        messages = self._build_answer_messages(query, context_docs)
+        try:
+            async for chunk in self._get_summary_llm().astream(messages):
+                token = getattr(chunk, "content", None)
+                if token:
+                    yield token
+        except Exception as e:
+            yield f"[오류] 답변 생성 실패: {e}"
 
     # ─── 메모리 관리 ─────────────────────────────────────────────
 
@@ -509,6 +523,58 @@ class LegalSearchAgent:
             "retrieved_docs": top_docs,
             "search_mode": search_mode,
         }
+
+    async def search_streaming(self, query: str):
+        """search()와 동일한 파이프라인을 단계 진행 상황 + 토큰 스트리밍으로 제공.
+
+        UI(legal_panel.py)가 검색 중 "지금 어느 단계인지"와 답변을 실시간으로
+        보여줄 수 있도록 이벤트를 순서대로 yield 한다.
+
+        Yields:
+            ("stage", label: str)      — 현재 진행 단계 설명
+            ("token", text: str)       — 답변 생성 중 토큰 조각
+            ("done", result: dict)     — search() 와 동일한 스키마의 최종 결과
+        """
+        import asyncio
+
+        default_rank = self.db_cfg.get("default_rank", 5)
+        default_rerank = self.db_cfg.get("default_rerank", 3)
+
+        yield ("stage", "질문에서 핵심 키워드 추출 중…")
+        keywords = await asyncio.to_thread(self._extract_keywords, query)
+
+        search_mode = "no_db"
+        all_candidates = []
+        if self._law_indexes:
+            yield ("stage", "법령 벡터 DB에서 관련 조항 검색 중…")
+            for kw in keywords:
+                docs = await asyncio.to_thread(self._vector_search, kw, default_rank)
+                all_candidates.extend(docs)
+            all_candidates = list(dict.fromkeys(all_candidates))
+
+            embedded = await asyncio.to_thread(self._embed_text, query)
+            search_mode = "vector" if embedded is not None else "keyword"
+
+        yield ("stage", "검색 결과 관련도 재정렬 중…")
+        top_docs = await asyncio.to_thread(self._rerank, query, all_candidates, default_rerank)
+
+        yield ("stage", "답변 생성 중…")
+        full_parts: list[str] = []
+        async for token in self._astream_answer(query, top_docs):
+            full_parts.append(token)
+            yield ("token", token)
+        answer = "".join(full_parts)
+
+        self.history.append({"role": "user", "content": query})
+        self.history.append({"role": "assistant", "content": answer})
+        self._maybe_compress_memory()
+
+        yield ("done", {
+            "answer": answer,
+            "keywords": keywords,
+            "retrieved_docs": top_docs,
+            "search_mode": search_mode,
+        })
 
     def get_loaded_laws(self) -> list[str]:
         """로드된 법령 목록 반환."""

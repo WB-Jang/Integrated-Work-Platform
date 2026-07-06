@@ -469,6 +469,34 @@ def build_agent_panel(parent, state, create_llm, config):
                 )
             return bubble
 
+        _THINKING_STAGES = [
+            '요청을 분석하고 있습니다…',
+            '플랫폼 기능과 대조하고 있습니다…',
+            '실행 계획을 정리하고 있습니다…',
+        ]
+
+        async def _animate_stage_bubble(bubble):
+            """LLM 호출이 끝날 때까지 로딩 버블의 문구를 순환시켜, 실제 진행 단계는
+            알 수 없지만(단일 JSON 호출이라 중간 단계 훅이 없음) 모델이 계속
+            작업 중임을 사용자가 실시간으로 느낄 수 있도록 한다."""
+            i = 0
+            try:
+                while True:
+                    await asyncio.sleep(1.4)
+                    label = _THINKING_STAGES[i % len(_THINKING_STAGES)]
+                    bubble.content = (
+                        '<div class="msg ai">'
+                        '<div class="msg-role"><span class="avatar">AI</span><span>어시스턴트</span></div>'
+                        '<div class="msg-body" style="color:var(--text-3);display:flex;align-items:center;gap:8px;">'
+                        '<span class="material-symbols-outlined" '
+                        'style="font-size:16px;animation:spin 1.2s linear infinite;">progress_activity</span>'
+                        f'{label}</div>'
+                        '</div>'
+                    )
+                    i += 1
+            except asyncio.CancelledError:
+                pass
+
         # ── step 게이팅 (플랜 카드 1개당 독립된 상태) ──────────────────────
         def _add_plan_bubble(message: str, steps: list):
             """실행 계획 말풍선 — STEP 카드(승인/건너뛰기)를 메시지 안에 렌더링."""
@@ -631,6 +659,7 @@ def build_agent_panel(parent, state, create_llm, config):
                 history.append({'role': 'user', 'content': text})
                 loading = _add_ai_loading_bubble()
                 _scroll_bottom()
+                stage_task = asyncio.create_task(_animate_stage_bubble(loading))
 
                 model_id = state.get('selected_model_id')
                 try:
@@ -642,6 +671,8 @@ def build_agent_panel(parent, state, create_llm, config):
                     _add_ai_text_bubble(f'계획 수립 오류: {e}', is_error=True)
                     log.error("에이전트 처리 오류: %s", e)
                     return
+                finally:
+                    stage_task.cancel()
 
                 loading.delete()
 
