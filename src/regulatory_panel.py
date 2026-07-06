@@ -8,6 +8,7 @@ import html as _html
 from nicegui import ui, run as nicegui_run, app as nicegui_app
 
 from logger import get_logger, set_current_user
+import activity_log
 
 log = get_logger("regulatory_panel")
 
@@ -296,11 +297,12 @@ def build_regulatory_panel(config: dict, create_llm_fn):
                 f'<div class="muted-text" style="margin-top:8px;">{len(results)}건 완료</div>'
             )
             ui.notify(f'{len(results)}건 분석 완료', type='positive', position='top')
+            activity_log.record('regulatory', '금감원 보도자료 조회', detail=f'{len(results)}건', status='done')
         except Exception as e:
             log.error('기관별 조회 오류: %s', e)
             ui.notify(f'조회 오류: {e}', type='negative', position='top')
             fetch_status_agency.content = (
-                '<div class="muted-text" style="margin-top:8px;color:#b91c1c;">조회 실패</div>'
+                '<div class="muted-text" style="margin-top:8px;color:var(--danger);">조회 실패</div>'
             )
         finally:
             fetch_progress.visible = False

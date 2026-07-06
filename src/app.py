@@ -74,6 +74,8 @@ from fss_dashboard_panel import build_fss_dashboard_panel
 from risk_indicator_panel import build_risk_indicator_panel
 from agent_console import build_agent_panel
 import menu_state as _msm
+import activity_log
+from datetime import datetime
 import user_memory
 from persona import get_persona_block
 from timer_utils import ClientBoundTimer
@@ -293,6 +295,7 @@ def _build_openrouter_llm(model_id=None, temperature=0, max_tokens=None) -> Chat
 
 
 def create_llm(model_id=None) -> ChatOpenAI:
+    activity_log.record_llm_request()
     # UI 드롭다운에서 모델이 선택된 경우: OpenAI 직통 또는 OpenRouter 분기
     if model_id:
         if model_id in MODEL_OPTIONS_OPENAI:
@@ -516,41 +519,6 @@ def render_results(container, results_data):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 홈 채팅 — 플랫폼 안내 어시스턴트
-# ──────────────────────────────────────────────────────────────────────────────
-_HOME_SYSTEM_PROMPT = """당신은 통합업무플랫폼(Integrated Work Platform)의 AI 안내 어시스턴트입니다.
-사용자가 플랫폼 기능을 이해하고 활용할 수 있도록 안내합니다.
-
-[주요 기능]
-- 문서복합분석: DOCX/PDF/HWP 문서 오타 교정·논리 검증·Business Tone&Manner
-- 문서요약: 계층적 Map-Reduce 요약 또는 분량 축약
-- 문서질의응답: 업로드한 문서(들)를 RAG 로 LLM 과 자유 대화
-- 법률검색: 법령 FAISS 벡터 DB 기반 RAG 질의응답
-- PDF변환: Word/PPT 일괄 PDF 변환
-- 보고서작성: AI 자동 보고서 작성
-- 메일분석: Outlook 연동
-- 규제동향: 금감원·한은·금융위 보도자료 LLM 요약
-- DB관리: 법령별 FAISS 벡터 DB 구축 (관리자 전용)
-
-한국어로 친절하게 답변하세요."""
-
-_HOME_SUGGESTIONS = [
-    ("문서 복합 분석은 어떻게 쓰나요?",
-     "DOCX/PDF/HWP 업로드 → 오타·논리·스타일 검사",
-     "문서 복합 분석 기능 사용법 알려줘"),
-    ("법률 검색의 작동 원리",
-     "RAG 파이프라인 + 벡터 검색",
-     "법률 검색이 어떻게 동작하는지 설명해줘"),
-    ("PDF 변환 한꺼번에 처리하려면?",
-     "Word/PPT 일괄 변환",
-     "PDF 일괄 변환 방법"),
-    ("규제 동향은 어디서 가져오나요?",
-     "금감원·한은·금융위 보도자료",
-     "규제 동향 출처와 수집 주기 알려줘"),
-]
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Top nav bar (다크, IWP-Redesign-B) — Vue 컴포넌트 nest 잔상 제거를 위해
 # 정적 HTML 단일 블록 + JS 위임 방식 (사이드바 시절과 동일한 패턴 유지)
 #
@@ -662,6 +630,210 @@ class _NavProxy:
         """admin_panel 호환 stub. switch_tab의 classes(remove='active')/(add='active')는
         switch_tab 자체가 JS로 처리하므로 여기서는 무시."""
         return self
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 홈 — KPI 대시보드 (IWP-Redesign-B)
+#
+# 목업의 카드 배치·클래스(.card/.badge-*/.risk-bar-*)를 그대로 가져오되, 표시되는
+# 모든 수치는 activity_log(각 패널이 실제로 기록하는 완료 이벤트)·llm_status·
+# 로컬 legal_db 폴더 스캔에서 얻은 실데이터다. 데모용 고정값은 없다.
+# ──────────────────────────────────────────────────────────────────────────────
+def _vector_db_status() -> tuple[bool, int]:
+    """법률 벡터 DB(FAISS) 인덱스 파일 존재 여부 + 개수 — 실제 legal_db 폴더 스캔."""
+    try:
+        faiss_dir = _config.get('legal_db', {}).get('faiss_dir', './legal_db')
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+        full = os.path.normpath(os.path.join(base, faiss_dir))
+        if not os.path.isdir(full):
+            return False, 0
+        n = len([f for f in os.listdir(full) if f.endswith('_idx.index')])
+        return n > 0, n
+    except Exception:
+        return False, 0
+
+
+def _kpi_card(label: str, value, delta_html: str, accent: str | None, goto: str) -> str:
+    if accent:
+        bg = (
+            f'background:linear-gradient(135deg,{accent}1a,{accent}08);'
+            f'border:1px solid {accent}33;'
+        )
+        value_color = accent
+    else:
+        bg = ''
+        value_color = '#f1f5f9'
+    return (
+        f'<div class="{"card" if not accent else ""}" '
+        f'style="{bg}border-radius:14px;padding:22px;cursor:pointer;" '
+        f'data-goto="{goto}">'
+        f'<div style="font-size:10px;font-weight:600;letter-spacing:.1em;'
+        f'color:rgba(148,163,184,.5);text-transform:uppercase;margin-bottom:12px;">{label}</div>'
+        f'<div class="sg" style="font-size:38px;font-weight:700;color:{value_color};line-height:1;">{value}</div>'
+        f'<div style="font-size:11px;margin-top:8px;">{delta_html}</div>'
+        f'</div>'
+    )
+
+
+def _recent_activity_html() -> str:
+    items = activity_log.recent(5)
+    if not items:
+        return (
+            '<div style="font-size:12px;color:rgba(148,163,184,.4);padding:20px 0;text-align:center;">'
+            '아직 기록된 작업이 없습니다. 기능을 사용하면 여기에 표시됩니다.</div>'
+        )
+    rows = []
+    for it in items:
+        rows.append(
+            '<div style="display:flex;gap:10px;padding:11px 0;'
+            'border-bottom:1px solid rgba(255,255,255,.04);align-items:center;">'
+            f'<div style="width:7px;height:7px;background:{it["dot_color"]};'
+            'border-radius:50%;flex-shrink:0;"></div>'
+            '<div style="flex:1;min-width:0;">'
+            f'<div style="font-size:12px;font-weight:500;color:#f1f5f9;overflow:hidden;'
+            f'text-overflow:ellipsis;white-space:nowrap;">{_html.escape(it["title"])}</div>'
+            f'<div style="font-size:11px;color:rgba(148,163,184,.4);margin-top:1px;">{_html.escape(it["sub"])}</div>'
+            '</div>'
+            f'<span class="{it["badge_class"]}">{_html.escape(str(it["badge_label"]))}</span>'
+            '</div>'
+        )
+    return ''.join(rows)
+
+
+def _render_home_dashboard(container, state: dict) -> None:
+    today = datetime.now().strftime('%Y.%m.%d')
+    vdb_ok, vdb_count = _vector_db_status()
+    llm_ok = llm_status.is_available()
+    provider = llm_status.provider() or '미연결'
+
+    analysis_total = activity_log.count_total('analysis')
+    analysis_today = activity_log.count_today('analysis')
+    legal_month = activity_log.count_month('legal')
+    report_total = activity_log.count_total('report')
+    report_today = activity_log.count_today('report')
+    reg_today = activity_log.count_today('regulatory')
+
+    html = f'''
+    <div style="max-width:1360px;margin:0 auto;padding:32px 40px;">
+      <div style="margin-bottom:32px;">
+        <div style="font-size:11px;font-weight:600;letter-spacing:.14em;color:#0ea5e9;
+          text-transform:uppercase;margin-bottom:8px;">{_html.escape(state.get('user_initials','-'))} · {today}</div>
+        <div class="sg" style="font-size:34px;font-weight:700;color:#f1f5f9;letter-spacing:-.04em;line-height:1.1;">
+          업무 현황 <span style="color:#0ea5e9;">대시보드</span></div>
+        <div style="width:56px;height:2px;background:linear-gradient(90deg,#0ea5e9,transparent);
+          margin-top:14px;border-radius:1px;"></div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-bottom:28px;">
+        {_kpi_card('문서 분석 완료', analysis_total,
+            f'<span style="color:#0ea5e9;">↑ {analysis_today}건</span> '
+            f'<span style="color:rgba(148,163,184,.4);">오늘</span>' if analysis_today else
+            '<span style="color:rgba(148,163,184,.4);">오늘 기록 없음</span>',
+            '#0ea5e9', 'analysis')}
+        {_kpi_card('법률 검색', legal_month,
+            '<span style="color:rgba(148,163,184,.4);">이번 달 누적</span>', None, 'legal')}
+        {_kpi_card('보고서 작성', report_total,
+            f'<span style="color:#f59e0b;">오늘 {report_today}건</span>' if report_today else
+            '<span style="color:rgba(148,163,184,.4);">이번 달 누적</span>', None, 'reporting')}
+        {_kpi_card('규제 조회', reg_today,
+            '<span style="color:#f59e0b;">오늘 조회</span>' if reg_today else
+            '<span style="color:rgba(148,163,184,.4);">오늘 조회 없음</span>',
+            '#f59e0b', 'regulatory')}
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 300px;gap:18px;">
+        <div class="card" style="padding:22px;">
+          <div class="sg" style="font-size:13px;font-weight:600;color:#f1f5f9;margin-bottom:16px;
+            letter-spacing:-.01em;">최근 작업 이력</div>
+          <div style="display:flex;flex-direction:column;gap:0;">{_recent_activity_html()}</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:12px;">
+          <div class="card" style="padding:18px;cursor:pointer;" data-goto="analysis">
+            <div style="width:34px;height:34px;border-radius:9px;background:rgba(14,165,233,.1);
+              display:flex;align-items:center;justify-content:center;margin-bottom:10px;">
+              <span class="material-symbols-outlined" style="font-size:18px;color:#0ea5e9;">description</span>
+            </div>
+            <div style="font-size:12px;font-weight:600;color:#f1f5f9;margin-bottom:3px;">문서 복합 분석</div>
+            <div style="font-size:10px;color:rgba(148,163,184,.4);">교정·논리오류·Business Tone</div>
+          </div>
+          <div class="card" style="padding:18px;cursor:pointer;" data-goto="legal">
+            <div style="width:34px;height:34px;border-radius:9px;background:rgba(99,102,241,.1);
+              display:flex;align-items:center;justify-content:center;margin-bottom:10px;">
+              <span class="material-symbols-outlined" style="font-size:18px;color:#818cf8;">gavel</span>
+            </div>
+            <div style="font-size:12px;font-weight:600;color:#f1f5f9;margin-bottom:3px;">법률 검색 <span class="badge-rag" style="vertical-align:middle;">RAG</span></div>
+            <div style="font-size:10px;color:rgba(148,163,184,.4);">법령·판례 벡터 검색</div>
+          </div>
+          <div class="card" style="padding:18px;cursor:pointer;" data-goto="reporting">
+            <div style="width:34px;height:34px;border-radius:9px;background:rgba(255,255,255,.06);
+              display:flex;align-items:center;justify-content:center;margin-bottom:10px;">
+              <span class="material-symbols-outlined" style="font-size:18px;color:rgba(148,163,184,.7);">assignment</span>
+            </div>
+            <div style="font-size:12px;font-weight:600;color:#f1f5f9;margin-bottom:3px;">보고서 작성</div>
+            <div style="font-size:10px;color:rgba(148,163,184,.4);">AI 자동 초안 생성</div>
+          </div>
+          <div style="background:rgba(245,158,11,.04);border:1px solid rgba(245,158,11,.15);
+            border-radius:12px;padding:18px;cursor:pointer;" data-goto="regulatory">
+            <div style="width:34px;height:34px;border-radius:9px;background:rgba(245,158,11,.1);
+              display:flex;align-items:center;justify-content:center;margin-bottom:10px;">
+              <span class="material-symbols-outlined" style="font-size:18px;color:#f59e0b;">monitoring</span>
+            </div>
+            <div style="font-size:12px;font-weight:600;color:#f1f5f9;margin-bottom:3px;">규제 동향</div>
+            <div style="font-size:10px;color:rgba(148,163,184,.4);">오늘 {reg_today}건 조회</div>
+          </div>
+        </div>
+
+        <div class="card" style="padding:22px;display:flex;flex-direction:column;gap:16px;">
+          <div class="sg" style="font-size:13px;font-weight:600;color:#f1f5f9;">시스템 상태</div>
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+                <span style="font-size:11px;color:rgba(148,163,184,.6);">LLM 엔진 ({_html.escape(provider)})</span>
+                <div style="display:flex;align-items:center;gap:4px;">
+                  <div style="width:5px;height:5px;background:{'#22c55e' if llm_ok else '#ef4444'};border-radius:50%;"></div>
+                  <span style="font-size:10px;color:{'#22c55e' if llm_ok else '#ef4444'};">{'정상' if llm_ok else '미연결'}</span>
+                </div>
+              </div>
+              <div class="risk-bar-track"><div class="risk-bar-fill" style="width:{100 if llm_ok else 0}%;
+                background:linear-gradient(90deg,#0ea5e9,#22c55e);"></div></div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+                <span style="font-size:11px;color:rgba(148,163,184,.6);">벡터 DB (FAISS)</span>
+                <div style="display:flex;align-items:center;gap:4px;">
+                  <div style="width:5px;height:5px;background:{'#22c55e' if vdb_ok else '#ef4444'};border-radius:50%;"></div>
+                  <span style="font-size:10px;color:{'#22c55e' if vdb_ok else '#ef4444'};">{f'{vdb_count}개 로드' if vdb_ok else '없음'}</span>
+                </div>
+              </div>
+              <div class="risk-bar-track"><div class="risk-bar-fill" style="width:{min(100, vdb_count * 10)}%;
+                background:linear-gradient(90deg,#0ea5e9,#6366f1);"></div></div>
+            </div>
+            <div style="height:1px;background:rgba(255,255,255,.05);"></div>
+            <div style="display:flex;flex-direction:column;gap:7px;">
+              <div style="display:flex;justify-content:space-between;">
+                <span style="font-size:11px;color:rgba(148,163,184,.5);">활성 모델</span>
+                <span style="font-size:11px;color:rgba(148,163,184,.7);">{_html.escape(state.get('selected_model_id','-'))}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;">
+                <span style="font-size:11px;color:rgba(148,163,184,.5);">오늘 LLM 요청</span>
+                <span class="sg" style="font-size:11px;color:#0ea5e9;font-weight:600;">{activity_log.llm_requests_today()}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;">
+                <span style="font-size:11px;color:rgba(148,163,184,.5);">가동 시간</span>
+                <span style="font-size:11px;color:rgba(148,163,184,.7);">{activity_log.uptime_str()}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;">
+                <span style="font-size:11px;color:rgba(148,163,184,.5);">백엔드</span>
+                <span style="font-size:11px;color:rgba(148,163,184,.7);">{_html.escape(provider)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    '''
+    container.content = html
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -860,6 +1032,22 @@ def main_page(request: Request):
 </script>
 ''')
 
+    # ── JS event delegation: 홈 대시보드 KPI/빠른 시작 카드의 data-goto ──
+    # (#main-nav 밖 정적 HTML에서도 탭 전환이 가능하도록 document 전역에 위임)
+    ui.add_body_html('''
+<script>
+(function(){
+  document.addEventListener('click', function(e){
+    const el = e.target.closest('[data-goto]');
+    if (!el || el.closest('#main-nav')) return;
+    const k = el.getAttribute('data-goto');
+    const trig = document.getElementById('_nav_trigger_' + k);
+    if (trig) trig.click();
+  });
+})();
+</script>
+''')
+
     # ── 채팅 입력창 공통: 일반 Enter 의 기본동작(줄바꿈 삽입) 차단 ──────────
     # 전송은 서버측 keydown.enter 핸들러가 수행한다. 기본동작을 막지 않으면
     # 전송 직후 textarea 에 줄바꿈이 삽입되고, 그 입력 이벤트가 서버의
@@ -887,233 +1075,12 @@ def main_page(request: Request):
 
     with ui.element('main').classes('main-area'):
 
-        # ── HOME ──────────────────────────────────────────────────────────
+        # ── HOME (KPI 대시보드 — IWP-Redesign-B) ───────────────────────────
         panel_home = ui.element('div').classes('panel')
         panels['home'] = panel_home
         with panel_home:
-            with ui.element('div').classes('page-head'):
-                ui.html(
-                    '<div class="titles">'
-                    '<div class="page-title">홈</div>'
-                    '<div class="page-subtitle">플랫폼 사용법과 기능을 안내해 드립니다.</div>'
-                    '</div>'
-                )
-
-            chat_wrap = ui.element('div').classes('chat-wrap')
-            with chat_wrap:
-                empty_state = ui.element('div').classes('chat-empty')
-                with empty_state:
-                    ui.html(
-                        '<div class="empty-mark">'
-                        '<span class="material-symbols-outlined">auto_awesome</span>'
-                        '</div>'
-                        '<h2>무엇을 도와드릴까요?</h2>'
-                        '<p>통합업무플랫폼은 문서 분석·요약, 법률 검색, 보고서 작성, '
-                        '규제 동향 모니터링 등을 한 곳에서 제공합니다. 궁금한 기능을 '
-                        '자연어로 질문해 보세요.</p>'
-                    )
-                    sugg_row = ui.element('div').classes('suggestion-grid')
-
-                scroll_area = ui.element('div').classes('chat-scroll').style('display:none;')
-                with scroll_area:
-                    chat_inner = ui.element('div').classes('chat-inner')
-
-                # ── Composer ───────────────────────────────────────────
-                with ui.element('div').classes('composer-wrap'):
-                    with ui.element('div').classes('composer'):
-                        home_input = ui.textarea(
-                            placeholder='플랫폼 기능에 대해 무엇이든 물어보세요…',
-                        ).props('borderless autogrow rows=1 dense').classes('flex-1')
-
-                        with ui.element('div').classes('composer-actions'):
-                            attach_btn = ui.element('button').classes('icon-btn')
-                            attach_btn.props('title="파일 첨부"')
-                            with attach_btn:
-                                ui.html('<span class="material-symbols-outlined">attach_file</span>')
-
-                            send_btn = ui.element('button').classes('send-btn')
-                            send_btn.props('title="전송 (Enter)"')
-                            with send_btn:
-                                ui.html('<span class="material-symbols-outlined">arrow_upward</span>')
-                            _gate_llm_button(send_btn, native=True)
-
-                    ui.html(
-                        '<div class="composer-hint">'
-                        '<span>Shift + Enter 줄바꿈</span>'
-                        '<span><span class="kbd">Enter</span> 전송</span>'
-                        '</div>'
-                    )
-
-                _home_busy = {'v': False}
-
-                def _set_home_busy(busy: bool):
-                    """답변 생성 중 전송 버튼 비활성화 (+ _home_busy 로 중복 전송 차단)."""
-                    _home_busy['v'] = busy
-                    try:
-                        if busy:
-                            send_btn.props('disabled')
-                            send_btn.classes(add='is-disabled')
-                        else:
-                            send_btn.props(remove='disabled')
-                            send_btn.classes(remove='is-disabled')
-                    except Exception:
-                        pass
-
-                async def _home_send(msg_text: str = None):
-                    if not llm_status.guard():
-                        return
-                    if _home_busy['v']:
-                        return  # 답변 생성 중 — 추가 전송 차단
-                    msg = (msg_text if msg_text is not None else home_input.value or '').strip()
-                    if not msg:
-                        return
-                    _set_home_busy(True)
-                    home_input.value = ''
-                    try:
-                        await _do_home_send(msg)
-                    finally:
-                        _set_home_busy(False)
-                        # 전송 직후 늦게 도착한 클라이언트 입력 이벤트가 서버 값을
-                        # 복원하는 레이스 대비 — 답변 완료 시점에 한 번 더 비움
-                        home_input.value = ''
-
-                async def _do_home_send(msg: str):
-                    home_history.append({'role': 'user', 'content': msg})
-
-                    # 첫 메시지면 empty state 숨기고 채팅 영역 표시
-                    empty_state.style('display:none;')
-                    scroll_area.style('display:block;')
-
-                    safe_msg = _html.escape(msg).replace('\n', '<br>')
-                    with chat_inner:
-                        ui.html(
-                            '<div class="msg user">'
-                            '<div class="msg-role">'
-                            '<span class="avatar">나</span><span>사용자</span>'
-                            '</div>'
-                            f'<div class="msg-body">{safe_msg}</div>'
-                            '</div>'
-                        )
-                        stream_bubble = ui.html(
-                            '<div class="msg ai">'
-                            '<div class="msg-role">'
-                            '<span class="avatar">AI</span><span>어시스턴트</span>'
-                            '</div>'
-                            '<div class="msg-body"><span class="chat-cursor"></span></div>'
-                            '</div>'
-                        )
-
-                    reply_parts: list[str] = []
-                    reply = ''
-                    try:
-                        from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-                        home_llm = create_llm(model_id=state.get('selected_model_id'))
-                        _home_sys = _HOME_SYSTEM_PROMPT
-                        if state.get('persona_block'):
-                            _home_sys += '\n\n' + state['persona_block']
-                        msgs = [SystemMessage(content=_home_sys)]
-                        for h in home_history[-20:]:
-                            msgs.append(
-                                HumanMessage(content=h['content']) if h['role'] == 'user'
-                                else AIMessage(content=h['content'])
-                            )
-
-                        async for chunk in home_llm.astream(msgs):
-                            token = chunk.content
-                            if token:
-                                reply_parts.append(token)
-                                current = _html.escape(''.join(reply_parts)).replace('\n', '<br>')
-                                stream_bubble.content = (
-                                    '<div class="msg ai">'
-                                    '<div class="msg-role">'
-                                    '<span class="avatar">AI</span><span>어시스턴트</span>'
-                                    '</div>'
-                                    f'<div class="msg-body">{current}<span class="chat-cursor"></span></div>'
-                                    '</div>'
-                                )
-                                await asyncio.sleep(0)
-
-                        reply = ''.join(reply_parts)
-                        safe_reply = _html.escape(reply).replace('\n', '<br>')
-                        stream_bubble.content = (
-                            '<div class="msg ai">'
-                            '<div class="msg-role">'
-                            '<span class="avatar">AI</span><span>어시스턴트</span>'
-                            '</div>'
-                            f'<div class="msg-body">{safe_reply}</div>'
-                            '</div>'
-                        )
-                    except Exception as exc:
-                        stream_bubble.content = (
-                            '<div class="msg ai">'
-                            '<div class="msg-role">'
-                            '<span class="avatar">AI</span><span>어시스턴트</span>'
-                            '</div>'
-                            f'<div class="msg-body" style="color:#b91c1c;">[오류] {_html.escape(str(exc))}</div>'
-                            '</div>'
-                        )
-                        reply = f'[오류] {exc}'
-
-                    home_history.append({'role': 'assistant', 'content': reply})
-                    if len(home_history) > 50:
-                        # 유저별 공유 리스트이므로 재할당 대신 in-place 절단
-                        home_history[:] = home_history[-30:]
-
-                    # ui.run_javascript는 slot 컨텍스트 필요 — 명시적으로 진입
-                    with chat_inner:
-                        ui.run_javascript(
-                            'document.querySelectorAll(".chat-scroll").forEach(s => '
-                            '{ s.scrollTop = s.scrollHeight; });'
-                        )
-
-                # 추천 카드 클릭 → 즉시 전송
-                with sugg_row:
-                    for title, sub, prompt in _HOME_SUGGESTIONS:
-                        b = ui.element('button').classes('suggestion')
-                        with b:
-                            ui.html(
-                                f'<span class="s-title">{_html.escape(title)}</span>'
-                                f'<span class="s-sub">{_html.escape(sub)}</span>'
-                            )
-                        b.on('click', lambda _e, p=prompt: asyncio.create_task(_home_send(p)))
-                        _gate_llm_button(b, native=True)
-
-                # Enter 키 전송 (Shift+Enter 줄바꿈, 한글 IME 조합 중 Enter 무시)
-                async def _home_enter_key(e):
-                    args = e.args if isinstance(e.args, dict) else {}
-                    if args.get('shiftKey') or args.get('isComposing'):
-                        return
-                    await _home_send()
-
-                home_input.on('keydown.enter', _home_enter_key)
-                send_btn.on('click', lambda _e: asyncio.create_task(_home_send()))
-
-                # ── 유저(IP)별 메모리 복원 — 재접속 시 이전 홈 대화 표시 ──
-                if home_history:
-                    empty_state.style('display:none;')
-                    scroll_area.style('display:block;')
-                    with chat_inner:
-                        for h in home_history:
-                            if h.get('role') == 'user':
-                                _safe_h = _html.escape(h.get('content', '')).replace('\n', '<br>')
-                                ui.html(
-                                    '<div class="msg user">'
-                                    '<div class="msg-role">'
-                                    '<span class="avatar">나</span><span>사용자</span>'
-                                    '</div>'
-                                    f'<div class="msg-body">{_safe_h}</div>'
-                                    '</div>'
-                                )
-                            else:
-                                _safe_h = _html.escape(h.get('content', '')).replace('\n', '<br>')
-                                ui.html(
-                                    '<div class="msg ai">'
-                                    '<div class="msg-role">'
-                                    '<span class="avatar">AI</span><span>어시스턴트</span>'
-                                    '</div>'
-                                    f'<div class="msg-body">{_safe_h}</div>'
-                                    '</div>'
-                                )
+            home_root = ui.html('').style('height:100%;overflow-y:auto;')
+            _render_home_dashboard(home_root, state)
 
         # ── AI 에이전트 콘솔 (PoC) ────────────────────────────────────────
         panel_agent = ui.element('div').classes('panel')
@@ -1504,6 +1471,10 @@ def main_page(request: Request):
                         'annotated_html': annotated_html,
                         'errors': list(file_errors),
                     }
+                    activity_log.record(
+                        'analysis', file_info['name'],
+                        detail=f'{len(file_errors)}건', status='done',
+                    )
                     if _is_active() and analysis_active_tab[0] == analysis_type:
                         arefs['preview'].content = (
                             '<div class="preview-text">'
@@ -1972,6 +1943,10 @@ def main_page(request: Request):
         for k, p in panels.items():
             p.style(f'display: {"flex" if k == key else "none"};')
 
+        if key == 'home':
+            # 홈 탭 재진입 시마다 KPI/최근 작업 이력을 최신 값으로 다시 렌더링
+            _render_home_dashboard(home_root, state)
+
         # LLM 미연결 상태에서 LLM 의존 탭 최초 진입 시 안내 팝업 (세션당 1회)
         if (not _llm_ok and key in _LLM_TAB_KEYS
                 and not _llm_notice_shown['v']):
@@ -2187,6 +2162,10 @@ def _build_summary_panel(parent, state):
                                 return
                             _elapsed = _t.monotonic() - _start_t
                             log.info('문서 요약 완료: %.1fs', _elapsed)
+                            activity_log.record(
+                                'summary', state.get('summary_file_name') or '문서 요약',
+                                detail=f'{_elapsed:.1f}s', status='done',
+                            )
                             summary_result.clear()
                             with summary_result:
                                 ui.html(
@@ -2265,6 +2244,9 @@ def _build_summary_panel(parent, state):
                             await nicegui_run.io_bound(
                                 create_compressed_docx,
                                 state['summary_file_path'], result['sections'], out_path,
+                            )
+                            activity_log.record(
+                                'summary', orig_name, detail='축약', status='done',
                             )
                             summary_result.clear()
                             with summary_result:
@@ -3018,6 +3000,11 @@ def _build_convert_panel(parent, state):
                     nonlocal success_count, failed_files
                     # 최종 요약 표시
                     total = s_count + len(f_files)
+                    activity_log.record(
+                        'convert', f'파일 {total}개 PDF 변환',
+                        detail=f'{s_count}/{total}',
+                        status='done' if not f_files else 'reviewing',
+                    )
                     with log_col:
                         ui.html(
                             f'<div style="margin-top:8px;padding:8px 12px;border-radius:var(--radius);'
@@ -3029,13 +3016,13 @@ def _build_convert_panel(parent, state):
                         with log_col:
                             ui.html(
                                 '<div style="margin-top:6px;padding:8px 12px;border-radius:var(--radius);'
-                                'background:#fef3c7;border:1px solid #d97706;'
-                                'font-size:13px;font-weight:600;color:#92400e;">'
+                                'background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.35);'
+                                'font-size:13px;font-weight:600;color:var(--warning);">'
                                 f'실패한 파일 ({len(f_files)}개) — 아래 목록을 확인하고 재시도하세요.</div>'
                             )
                             for fname in f_files:
                                 ui.html(
-                                    f'<div style="padding:4px 12px;font-size:12px;color:#b45309;">'
+                                    f'<div style="padding:4px 12px;font-size:12px;color:var(--warning);">'
                                     f'• {fname}</div>'
                                 )
                     close_btn.props(remove='disabled')

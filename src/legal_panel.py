@@ -10,6 +10,7 @@ from nicegui import ui, run as nicegui_run, app as nicegui_app
 
 from legal_search import LegalSearchAgent
 from logger import get_logger, set_current_user
+import activity_log
 
 log = get_logger("legal_panel")
 
@@ -326,7 +327,7 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                     '<div class="msg-role">'
                     '<span class="avatar">AI</span><span>어시스턴트</span>'
                     '</div>'
-                    f'<div class="msg-body" style="color:#b91c1c;">[오류] {_html.escape(str(exc))}</div>'
+                    f'<div class="msg-body" style="color:var(--danger);">[오류] {_html.escape(str(exc))}</div>'
                     '</div>'
                 )
             except (ValueError, RuntimeError):
@@ -342,6 +343,7 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
             log.debug("loading_bubble 제거 스킵: %s", _del_exc)
         _add_bot_bubble(result)
         _update_mem_status()
+        activity_log.record('legal', query[:40], status='done')
 
     # 추천 카드 클릭 → 즉시 검색
     with sugg_row:

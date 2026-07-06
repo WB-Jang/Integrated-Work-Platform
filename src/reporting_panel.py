@@ -12,6 +12,7 @@ from pathlib import Path
 from nicegui import ui, events, run as nicegui_run
 
 from reporting_runner import REPORT_CONFIGS, run_report, get_upload_dir, analyze_fx5260_var_accounts
+import activity_log
 
 
 def build_reporting_panel(config: dict):
@@ -416,8 +417,10 @@ def build_reporting_panel(config: dict):
                                 ui.download(path, filename=name),
                         ).classes('btn-primary-mono w-full mb-1')
             ui.notify(f"{cfg['name']} 완료", type='positive', position='top')
+            activity_log.record('report', cfg['name'], status='done')
         else:
             add_chat_message('sys', '실행 중 오류가 발생했습니다. 로그를 확인하세요.')
             ui.notify('실행 오류 발생', type='negative', position='top')
+            activity_log.record('report', cfg['name'], status='error')
 
     run_btn.on_click(execute_report)
