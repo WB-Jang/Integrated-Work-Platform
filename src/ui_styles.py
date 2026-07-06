@@ -108,6 +108,7 @@ select.material-symbols-outlined {
    ───────────────────────────────────────────────────────── */
 .top-nav-header {
   height: var(--topnav-h);
+  width: 100%;
   background: rgba(5,11,20,.97);
   border-bottom: 1px solid rgba(14,165,233,.1);
   display: flex; align-items: center;
@@ -156,13 +157,16 @@ html body #main-nav * {
   display: flex; height: var(--topnav-h);
   align-items: stretch;
   overflow-x: auto; overflow-y: hidden;
-  flex: 1;
-  scrollbar-width: none;
+  flex: 1; min-width: 0;
+  scrollbar-width: thin;
   -webkit-overflow-scrolling: touch;
 }
-#main-nav::-webkit-scrollbar { height: 3px; }
-#main-nav::-webkit-scrollbar-track { background: transparent; }
-#main-nav::-webkit-scrollbar-thumb { background: rgba(14,165,233,.3); border-radius: 2px; }
+/* 탭이 화면 폭을 넘칠 때 스크롤 가능함을 항상 알아볼 수 있도록 — 숨김 대신
+   상시 표시 (탭이 "사라진" 것처럼 보이는 문제 방지) */
+#main-nav::-webkit-scrollbar { height: 5px; }
+#main-nav::-webkit-scrollbar-track { background: rgba(255,255,255,.03); }
+#main-nav::-webkit-scrollbar-thumb { background: rgba(14,165,233,.5); border-radius: 3px; }
+#main-nav::-webkit-scrollbar-thumb:hover { background: rgba(14,165,233,.7); }
 
 .top-tab {
   font-family: var(--font-sans);
@@ -711,6 +715,7 @@ select.inp option { background: var(--bg-elev); color: var(--text); }
    ───────────────────────────────────────────────────────── */
 .main-area {
   height: calc(100vh - var(--topnav-h));
+  width: 100%;
   display: flex; flex-direction: column;
   overflow: hidden;
 }
