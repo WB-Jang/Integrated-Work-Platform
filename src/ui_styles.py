@@ -193,6 +193,91 @@ html body #main-nav * {
   font-size: 15px; vertical-align: -3px; margin-right: 4px;
 }
 
+/* ── 탭 그룹 드롭다운 (LLM 도구/업무 자동화/대시보드) ───────────────── */
+.nav-group { position: relative; height: 100%; display: flex; flex-shrink: 0; }
+.nav-group-btn { display: flex; align-items: center; }
+.nav-caret { font-size: 14px !important; margin-left: 2px !important; margin-right: 0 !important; transition: transform .15s; }
+.nav-group.open .nav-caret { transform: rotate(180deg); }
+.nav-group.has-active .nav-group-btn { color: var(--accent) !important; }
+.nav-group.has-active .nav-group-btn::after {
+  content: ''; position: absolute; bottom: 0; left: 16px; right: 16px;
+  height: 2px; background: var(--accent); border-radius: 1px;
+}
+.nav-dropdown {
+  display: none;
+  position: absolute; top: 100%; left: 0; margin-top: 4px;
+  min-width: 210px; background: var(--bg-elev); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: 0 12px 28px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.4);
+  padding: 4px; z-index: 40;
+}
+.nav-group.open .nav-dropdown { display: block; }
+.nav-dropdown-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: transparent !important; border: none; cursor: pointer;
+  padding: 8px 10px; font-size: 12.5px; font-weight: 500; color: var(--text-2);
+  border-radius: 6px; text-align: left; white-space: nowrap;
+  box-shadow: none !important;
+}
+.nav-dropdown-item:hover { background: rgba(255,255,255,.06); color: var(--text); }
+.nav-dropdown-item.active { background: rgba(14,165,233,.12); color: var(--accent); }
+.nav-dropdown-item .material-symbols-outlined { font-size: 16px; margin-right: 0; }
+
+/* ── 좌우 스크롤 버튼 + 가장자리 페이드 (오버플로 시 보조 힌트) ──────── */
+.nav-scroll-btn {
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 100%; background: transparent !important; border: none;
+  cursor: pointer; color: var(--text-3); box-shadow: none !important;
+}
+.nav-scroll-btn:hover { color: var(--text); }
+.nav-scroll-btn .material-symbols-outlined { font-size: 18px; margin-right: 0; }
+.nav-scroll-btn[disabled] { opacity: .25; cursor: default; pointer-events: none; }
+.nav-fade-right, .nav-fade-left {
+  position: absolute; top: 0; bottom: 0; width: 20px; pointer-events: none; z-index: 5;
+  opacity: 0; transition: opacity .15s;
+}
+.nav-fade-right { right: 24px; background: linear-gradient(90deg, transparent, rgba(5,11,20,.97)); }
+.nav-fade-left { left: 24px; background: linear-gradient(270deg, transparent, rgba(5,11,20,.97)); }
+.nav-fade-right.show, .nav-fade-left.show { opacity: 1; }
+
+/* ── 키보드 포커스 링 ──────────────────────────────────────────────── */
+.top-tab:focus-visible,
+.nav-dropdown-item:focus-visible,
+.nav-scroll-btn:focus-visible {
+  outline: 2px solid var(--accent) !important; outline-offset: -2px;
+}
+
+/* ── 커맨드 팔레트 (Cmd/Ctrl+K) ──────────────────────────────────────── */
+.cmdk-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55);
+  z-index: 500; display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 12vh;
+}
+.cmdk-panel {
+  width: 560px; max-width: 92vw; max-height: 60vh;
+  background: var(--bg-elev); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg); box-shadow: 0 24px 60px rgba(0,0,0,.6);
+  overflow: hidden; display: flex; flex-direction: column;
+}
+.cmdk-input {
+  width: 100%; border: none; background: transparent; color: var(--text);
+  font-size: 15px; padding: 16px 18px; outline: none; font-family: var(--font-sans);
+  border-bottom: 1px solid var(--border);
+}
+.cmdk-input::placeholder { color: var(--text-4); }
+.cmdk-list { overflow-y: auto; padding: 6px; }
+.cmdk-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-radius: var(--radius); cursor: pointer; color: var(--text-2); font-size: 13px;
+}
+.cmdk-item .material-symbols-outlined { font-size: 16px; color: var(--text-3); margin-right: 0; }
+.cmdk-item.sel { background: rgba(14,165,233,.12); color: var(--text); }
+.cmdk-item .cmdk-group { margin-left: auto; font-size: 10.5px; color: var(--text-4); }
+.cmdk-empty { padding: 20px; text-align: center; color: var(--text-4); font-size: 13px; }
+.cmdk-hint {
+  padding: 8px 14px; border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text-4); display: flex; gap: 12px;
+}
+
 /* 서브탭 — 문서분석/요약/Q&A 등의 "실행/결과" 전환 바 */
 .sub-tab-bar {
   display: flex; gap: 4px;

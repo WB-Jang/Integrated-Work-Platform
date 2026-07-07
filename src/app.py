@@ -550,37 +550,86 @@ _NAV_DASH  = [
 _NAV_ADMIN = ('admin', 'DB 관리', 'settings')
 _NAV_AGENT = ('agent', 'AI 에이전트', 'smart_toy')
 
+# 그룹 드롭다운 메타 (gkey, glabel, gicon, items) — ux/improvements: 13개 flat
+# 탭을 논리 그룹으로 재편해 1280px 폭에서도 2클릭 이내 도달 가능하게 함.
+_NAV_GROUPS_META = [
+    ('llm',       'LLM 도구',    'smart_toy', _NAV_LLM),
+    ('business',  '업무 자동화', 'work',      _NAV_BIZ),
+    ('dashboard', '대시보드',    'dashboard', _NAV_DASH),
+]
+
 # LLM 백엔드가 필요한 탭 — 미연결 시 진입하면 안내 팝업을 띄운다.
 _LLM_TAB_KEYS = {'home', 'analysis', 'summary', 'qa', 'legal', 'outlook', 'regulatory', 'agent'}
 
 
 def _top_tab_html(key: str, label: str, icon: str, active: bool = False) -> str:
     cls = 'top-tab active' if active else 'top-tab'
+    aria_current = ' aria-current="page"' if active else ''
     return (
-        f'<button class="{cls}" id="tab-{key}" data-nav-key="{key}">'
+        f'<button class="{cls}" id="tab-{key}" data-nav-key="{key}" '
+        f'role="tab" tabindex="0"{aria_current}>'
         f'<span class="material-symbols-outlined">{icon}</span>{label}'
         f'</button>'
     )
 
 
-def _build_top_nav_html() -> str:
-    """상단 가로 탭바(#main-nav) 내부 HTML 정적 블록 생성.
+def _nav_dropdown_item_html(key: str, label: str, icon: str) -> str:
+    return (
+        f'<button class="nav-dropdown-item" id="tab-{key}" data-nav-key="{key}" '
+        f'role="menuitem" tabindex="-1">'
+        f'<span class="material-symbols-outlined">{icon}</span>{label}'
+        f'</button>'
+    )
 
-    IWP-Redesign-B 목업의 flat top-tab 구조를 따른다 — 사이드바 시절의
-    그룹 라벨/토글/서브메뉴는 없고, 모든 탭이 한 줄에 나열되며
-    가로 스크롤로 넘친 항목을 확인한다 (nav-wheel 핸들러가 세로 휠을
-    가로 스크롤로 변환).
+
+def _nav_group_html(gkey: str, glabel: str, gicon: str, items: list) -> str:
+    item_html = ''.join(_nav_dropdown_item_html(k, lbl, ic) for k, lbl, ic in items)
+    return (
+        f'<div class="nav-group" data-group="{gkey}">'
+        f'<button class="top-tab nav-group-btn" data-group-toggle="{gkey}" '
+        f'aria-haspopup="true" aria-expanded="false" tabindex="0" role="tab">'
+        f'<span class="material-symbols-outlined">{gicon}</span>{glabel}'
+        f'<span class="material-symbols-outlined nav-caret">expand_more</span>'
+        f'</button>'
+        f'<div class="nav-dropdown" data-group-menu="{gkey}" role="menu">'
+        f'{item_html}</div></div>'
+    )
+
+
+def _build_top_nav_html() -> str:
+    """상단 탭바(#main-nav) 내부 HTML 정적 블록 생성.
+
+    13개 flat 탭 대신, 자주 함께 쓰이는 기능을 3개 드롭다운 그룹으로 묶는다
+    (LLM 도구 / 업무 자동화 / 대시보드). 홈·AI 에이전트·DB 관리는 단독 탭으로
+    유지한다. 각 leaf 항목은 여전히 data-nav-key 를 가지므로 기존 클릭
+    위임·nav_elements proxy 는 변경 없이 그대로 동작한다.
     """
     parts = [_top_tab_html(_NAV_HOME[0], _NAV_HOME[1], _NAV_HOME[2], active=True)]
     parts.append(_top_tab_html(_NAV_AGENT[0], _NAV_AGENT[1], _NAV_AGENT[2]))
-    for key, label, icon in _NAV_LLM:
-        parts.append(_top_tab_html(key, label, icon))
-    for key, label, icon in _NAV_BIZ:
-        parts.append(_top_tab_html(key, label, icon))
-    for key, label, icon in _NAV_DASH:
-        parts.append(_top_tab_html(key, label, icon))
+    for gkey, glabel, gicon, items in _NAV_GROUPS_META:
+        parts.append(_nav_group_html(gkey, glabel, gicon, items))
     parts.append(_top_tab_html(_NAV_ADMIN[0], _NAV_ADMIN[1], _NAV_ADMIN[2]))
     return '\n'.join(parts)
+
+
+_NAV_KEY_TO_GROUP: dict = {
+    k: gkey
+    for gkey, _glabel, _gicon, group_items in _NAV_GROUPS_META
+    for k, _lbl, _ic in group_items
+}
+
+
+def _nav_search_index() -> list:
+    """커맨드 팔레트(Cmd/Ctrl+K) 검색 대상 — 모든 leaf nav 항목의 (key,label,group,icon)."""
+    items = [
+        {'key': _NAV_HOME[0], 'label': _NAV_HOME[1], 'group': '', 'icon': _NAV_HOME[2]},
+        {'key': _NAV_AGENT[0], 'label': _NAV_AGENT[1], 'group': '', 'icon': _NAV_AGENT[2]},
+    ]
+    for gkey, glabel, _gicon, group_items in _NAV_GROUPS_META:
+        for key, label, icon in group_items:
+            items.append({'key': key, 'label': label, 'group': glabel, 'icon': icon})
+    items.append({'key': _NAV_ADMIN[0], 'label': _NAV_ADMIN[1], 'group': '', 'icon': _NAV_ADMIN[2]})
+    return items
 
 
 class _NavProxy:
@@ -933,10 +982,30 @@ def main_page(request: Request):
             '</div>'
         )
 
-        with ui.element('nav').props('id=main-nav'):
-            ui.html(_build_top_nav_html(), sanitize=False)
+        ui.html(
+            '<button class="nav-scroll-btn" id="nav-scroll-left" aria-label="이전 탭" tabindex="0">'
+            '<span class="material-symbols-outlined">chevron_left</span></button>'
+        )
+        with ui.element('div').style('position:relative; flex:1; min-width:0; height:100%;'):
+            with ui.element('nav').props('id=main-nav').props('role=tablist'):
+                ui.html(_build_top_nav_html(), sanitize=False)
+            ui.html('<div class="nav-fade-left" id="nav-fade-left"></div>')
+            ui.html('<div class="nav-fade-right" id="nav-fade-right"></div>')
+        ui.html(
+            '<button class="nav-scroll-btn" id="nav-scroll-right" aria-label="다음 탭" tabindex="0">'
+            '<span class="material-symbols-outlined">chevron_right</span></button>'
+        )
 
         with ui.element('div').classes('nav-status'):
+            ui.html(
+                '<button class="nav-scroll-btn" id="cmdk-trigger" '
+                'aria-label="커맨드 팔레트 열기 (Ctrl/Cmd+K)" title="빠른 이동 (Ctrl/Cmd+K)" '
+                'tabindex="0" style="width:auto;padding:0 8px;gap:4px;display:flex;align-items:center;">'
+                '<span class="material-symbols-outlined" style="font-size:16px;">search</span>'
+                '<span style="font-size:10.5px;color:var(--text-4);border:1px solid var(--border);'
+                'border-radius:4px;padding:1px 5px;">⌘K</span>'
+                '</button>'
+            )
             model_select = ui.select(
                 options=list(MODEL_OPTIONS.keys()),
                 value=_DEFAULT_MODEL,
@@ -997,7 +1066,7 @@ def main_page(request: Request):
         },
     }
 
-    # ── JS event delegation: 상단 탭바 클릭 라우터 + 세로 휠 → 가로 스크롤 ──
+    # ── JS event delegation: 상단 탭바 클릭 라우터 + 그룹 드롭다운 + 스크롤 ──
     ui.add_body_html('''
 <script>
 (function(){
@@ -1006,14 +1075,46 @@ def main_page(request: Request):
     if (!nav) { setTimeout(bindTopNav, 100); return; }
     if (nav.dataset.delegated === '1') return;
     nav.dataset.delegated = '1';
+
+    function closeAllGroups(except){
+      nav.querySelectorAll('.nav-group.open').forEach(function(g){
+        if (g !== except) {
+          g.classList.remove('open');
+          const btn = g.querySelector('.nav-group-btn');
+          if (btn) btn.setAttribute('aria-expanded', 'false');
+        }
+      });
+    }
+
+    // 그룹 토글 열기/닫기 + leaf 클릭 라우팅
     nav.addEventListener('click', function(e){
+      const toggle = e.target.closest('[data-group-toggle]');
+      if (toggle) {
+        const group = toggle.closest('.nav-group');
+        const isOpen = group.classList.contains('open');
+        closeAllGroups(isOpen ? null : group);
+        group.classList.toggle('open', !isOpen);
+        toggle.setAttribute('aria-expanded', String(!isOpen));
+        e.stopPropagation();
+        return;
+      }
       const item = e.target.closest('[data-nav-key]');
       if (item && nav.contains(item)) {
         const k = item.getAttribute('data-nav-key');
         const trig = document.getElementById('_nav_trigger_' + k);
         if (trig) trig.click();
+        closeAllGroups(null);
       }
     });
+
+    // 바깥 클릭 / Escape 로 드롭다운 닫기
+    document.addEventListener('click', function(e){
+      if (!nav.contains(e.target)) closeAllGroups(null);
+    });
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape') closeAllGroups(null);
+    });
+
     // 세로 휠 스크롤을 가로 스크롤로 변환 (탭이 화면 폭을 넘칠 때)
     nav.addEventListener('wheel', function(e){
       if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
@@ -1021,7 +1122,66 @@ def main_page(request: Request):
         e.preventDefault();
       }
     }, { passive: false });
-    console.info('[IPM] top-nav click delegation bound');
+
+    // ── 좌우 스크롤 버튼 + 가장자리 페이드 ──────────────────────────────
+    const btnLeft = document.getElementById('nav-scroll-left');
+    const btnRight = document.getElementById('nav-scroll-right');
+    const fadeLeft = document.getElementById('nav-fade-left');
+    const fadeRight = document.getElementById('nav-fade-right');
+
+    function updateScrollAffordance(){
+      const max = nav.scrollWidth - nav.clientWidth - 1;
+      const atStart = nav.scrollLeft <= 0;
+      const atEnd = nav.scrollLeft >= max;
+      if (btnLeft) btnLeft.disabled = atStart;
+      if (btnRight) btnRight.disabled = atEnd || max <= 0;
+      if (fadeLeft) fadeLeft.classList.toggle('show', !atStart);
+      if (fadeRight) fadeRight.classList.toggle('show', !(atEnd || max <= 0));
+    }
+    nav.addEventListener('scroll', updateScrollAffordance, { passive: true });
+    window.addEventListener('resize', updateScrollAffordance);
+    if (btnLeft) btnLeft.addEventListener('click', function(){ nav.scrollBy({left: -160, behavior:'smooth'}); });
+    if (btnRight) btnRight.addEventListener('click', function(){ nav.scrollBy({left: 160, behavior:'smooth'}); });
+    setTimeout(updateScrollAffordance, 150);
+
+    // ── 활성 탭이 항상 보이도록 scrollLeft 직접 계산 (scrollIntoView 미사용 —
+    //    부모 레이아웃에 영향을 주는 브라우저 스크롤 앵커링 문제 회피) ──────
+    window.__navScrollToActive = function(key){
+      const el = document.getElementById('tab-' + key);
+      if (!el || !nav.contains(el)) return;
+      const elLeft = el.offsetLeft;
+      const elRight = elLeft + el.offsetWidth;
+      const viewLeft = nav.scrollLeft;
+      const viewRight = viewLeft + nav.clientWidth;
+      if (elLeft < viewLeft) {
+        nav.scrollTo({ left: Math.max(0, elLeft - 24), behavior: 'smooth' });
+      } else if (elRight > viewRight) {
+        nav.scrollTo({ left: elRight - nav.clientWidth + 24, behavior: 'smooth' });
+      }
+      setTimeout(updateScrollAffordance, 300);
+    };
+
+    // ── 키보드: 탭/그룹버튼 간 ← → 이동, Enter/Space 로 활성화 ───────────
+    function focusableTopLevel(){
+      // NiceGUI가 ui.html() 내용을 감싸는 래퍼 div를 nav 안에 삽입하므로
+      // 직계 자식(:scope >)이 아닌, 드롭다운 내부 항목을 제외한 전체 검색으로 찾는다.
+      return Array.prototype.slice.call(
+        nav.querySelectorAll('[data-nav-key]:not(.nav-dropdown-item), .nav-group-btn')
+      );
+    }
+    nav.addEventListener('keydown', function(e){
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const items = focusableTopLevel();
+      const idx = items.indexOf(document.activeElement);
+      if (idx === -1) return;
+      e.preventDefault();
+      const next = e.key === 'ArrowRight'
+        ? items[(idx + 1) % items.length]
+        : items[(idx - 1 + items.length) % items.length];
+      next.focus();
+    });
+
+    console.info('[IPM] top-nav click delegation + group dropdown bound');
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', bindTopNav);
@@ -1029,6 +1189,127 @@ def main_page(request: Request):
     bindTopNav();
   }
 })();
+</script>
+''')
+
+    # ── 커맨드 팔레트 (Cmd/Ctrl+K) ────────────────────────────────────────
+    import json as _json
+    _cmdk_items_json = _json.dumps(_nav_search_index(), ensure_ascii=False)
+    ui.add_body_html(
+        '<div class="cmdk-overlay" id="cmdk-overlay" style="display:none;" '
+        'role="dialog" aria-modal="true" aria-label="빠른 이동">'
+        '<div class="cmdk-panel">'
+        '<input class="cmdk-input" id="cmdk-input" type="text" '
+        'placeholder="기능 검색… (예: 법률검색, PDF)" autocomplete="off">'
+        '<div class="cmdk-list" id="cmdk-list"></div>'
+        '<div class="cmdk-hint">'
+        '<span>↑↓ 이동</span><span>Enter 이동</span><span>Esc 닫기</span>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+    ui.add_body_html(f'''
+<script>
+(function(){{
+  const NAV_ITEMS = {_cmdk_items_json};
+
+  function getEls(){{
+    return {{
+      overlay: document.getElementById('cmdk-overlay'),
+      input: document.getElementById('cmdk-input'),
+      list: document.getElementById('cmdk-list'),
+      trigger: document.getElementById('cmdk-trigger'),
+    }};
+  }}
+
+  let selIdx = 0;
+  let filtered = NAV_ITEMS.slice();
+
+  function render(){{
+    const {{ list }} = getEls();
+    if (!list) return;
+    if (filtered.length === 0) {{
+      list.innerHTML = '<div class="cmdk-empty">일치하는 기능이 없습니다</div>';
+      return;
+    }}
+    list.innerHTML = filtered.map(function(it, i){{
+      const groupTag = it.group ? '<span class="cmdk-group">' + it.group + '</span>' : '';
+      return '<div class="cmdk-item' + (i === selIdx ? ' sel' : '') + '" data-idx="' + i + '">' +
+        '<span class="material-symbols-outlined">' + it.icon + '</span>' +
+        '<span>' + it.label + '</span>' + groupTag + '</div>';
+    }}).join('');
+  }}
+
+  function fuzzyMatch(q, text){{
+    q = q.toLowerCase(); text = text.toLowerCase();
+    if (!q) return true;
+    let ti = 0;
+    for (let qi = 0; qi < q.length; qi++) {{
+      ti = text.indexOf(q[qi], ti);
+      if (ti === -1) return false;
+      ti++;
+    }}
+    return true;
+  }}
+
+  function doFilter(q){{
+    filtered = NAV_ITEMS.filter(function(it){{ return fuzzyMatch(q, it.label + ' ' + it.group); }});
+    selIdx = 0;
+    render();
+  }}
+
+  function open(){{
+    const {{ overlay, input }} = getEls();
+    if (!overlay) return;
+    overlay.style.display = 'flex';
+    input.value = '';
+    doFilter('');
+    setTimeout(function(){{ input.focus(); }}, 30);
+  }}
+  function close(){{
+    const {{ overlay }} = getEls();
+    if (overlay) overlay.style.display = 'none';
+  }}
+  function activate(idx){{
+    const it = filtered[idx];
+    if (!it) return;
+    const trig = document.getElementById('_nav_trigger_' + it.key);
+    if (trig) trig.click();
+    close();
+  }}
+
+  function bind(){{
+    const {{ overlay, input, list, trigger }} = getEls();
+    if (!overlay || overlay.dataset.bound === '1') {{ if (!overlay) setTimeout(bind, 150); return; }}
+    overlay.dataset.bound = '1';
+
+    if (trigger) trigger.addEventListener('click', open);
+    document.addEventListener('keydown', function(e){{
+      const isK = (e.key === 'k' || e.key === 'K');
+      if ((e.metaKey || e.ctrlKey) && isK) {{
+        e.preventDefault();
+        open();
+        return;
+      }}
+      if (overlay.style.display === 'none') return;
+      if (e.key === 'Escape') {{ e.preventDefault(); close(); }}
+      else if (e.key === 'ArrowDown') {{ e.preventDefault(); selIdx = Math.min(selIdx + 1, filtered.length - 1); render(); }}
+      else if (e.key === 'ArrowUp') {{ e.preventDefault(); selIdx = Math.max(selIdx - 1, 0); render(); }}
+      else if (e.key === 'Enter') {{ e.preventDefault(); activate(selIdx); }}
+    }});
+    overlay.addEventListener('click', function(e){{ if (e.target === overlay) close(); }});
+    input.addEventListener('input', function(){{ doFilter(input.value); }});
+    list.addEventListener('click', function(e){{
+      const item = e.target.closest('.cmdk-item');
+      if (item) activate(parseInt(item.getAttribute('data-idx'), 10));
+    }});
+  }}
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', bind);
+  }} else {{
+    bind();
+  }}
+}})();
 </script>
 ''')
 
@@ -1968,14 +2249,20 @@ def main_page(request: Request):
     # ──────────────────────────────────────────────────────────────────────
     def switch_tab(key):
         state['current_tab'] = key
-        # JS로 .active 클래스 토글 (상단 탭바가 정적 HTML이라 Python에서 직접 조작 불가)
+        group_key = _NAV_KEY_TO_GROUP.get(key, '')
+        # JS로 .active/aria-current/그룹 하이라이트 토글 + 활성 탭이 보이도록 스크롤
+        # (scrollIntoView는 상위 레이아웃 스크롤까지 흔들 수 있어 사용하지 않고,
+        #  #main-nav 자체의 scrollLeft만 __navScrollToActive 에서 직접 계산한다.)
         ui.run_javascript(
             "document.querySelectorAll('#main-nav [data-nav-key]').forEach("
-            "el => el.classList.remove('active'));"
+            "el => { el.classList.remove('active'); el.removeAttribute('aria-current'); });"
             f"const t = document.querySelector('#main-nav [data-nav-key=\"{key}\"]');"
-            "if (t) t.classList.add('active');"
-            f"const el = document.getElementById('tab-{key}'); if (el) el.scrollIntoView("
-            "{behavior:'smooth', inline:'center', block:'nearest'});"
+            "if (t) { t.classList.add('active'); t.setAttribute('aria-current', 'page'); }"
+            "document.querySelectorAll('#main-nav .nav-group').forEach("
+            "g => g.classList.remove('has-active'));"
+            f"const g = document.querySelector('#main-nav .nav-group[data-group=\"{group_key}\"]');"
+            "if (g) g.classList.add('has-active');"
+            f"if (window.__navScrollToActive) window.__navScrollToActive('{key}');"
         )
         for k, p in panels.items():
             p.style(f'display: {"flex" if k == key else "none"};')
@@ -1983,6 +2270,12 @@ def main_page(request: Request):
         if key == 'home':
             # 홈 탭 재진입 시마다 KPI/최근 작업 이력을 최신 값으로 다시 렌더링
             _render_home_dashboard(home_root, state)
+
+        # 마지막 방문 탭 기억 — 재접속 시 복원 (nicegui_app.storage.user, 브라우저별 영속)
+        try:
+            nicegui_app.storage.user['last_tab'] = key
+        except Exception:
+            pass
 
         # LLM 미연결 상태에서 LLM 의존 탭 최초 진입 시 안내 팝업 (세션당 1회)
         if (not _llm_ok and key in _LLM_TAB_KEYS
@@ -1995,6 +2288,14 @@ def main_page(request: Request):
     # Hidden 트리거 버튼에 click 핸들러 바인딩 — JS delegation이 이걸 click()으로 발화시킴
     for key in _ALL_NAV_KEYS:
         nav_triggers[key].on('click', lambda _e, k=key: switch_tab(k))
+
+    # 마지막 방문 탭 복원 (재접속 시) — 기본값(home)과 다를 때만 전환
+    try:
+        _last_tab = nicegui_app.storage.user.get('last_tab')
+    except Exception:
+        _last_tab = None
+    if _last_tab and _last_tab in _ALL_NAV_KEYS and _last_tab != 'home':
+        switch_tab(_last_tab)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
