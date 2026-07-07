@@ -81,7 +81,10 @@ from persona import get_persona_block
 from timer_utils import ClientBoundTimer
 from logger import get_logger, set_current_user, register_client_user, unregister_client_user
 
-from ui_styles import inject_global_css   # ← 신규: 모노크롬 디자인 시스템
+from ui_styles import (       # ← 모노크롬 디자인 시스템 + ux/screens 공통 컴포넌트
+    inject_global_css, progress_block_html, step_list_html,
+    elapsed_ticker_script, req_checklist_html,
+)
 
 log = get_logger("app")
 
@@ -510,30 +513,48 @@ def analyze_one_section(chain, title, content):
     return section_html, errors
 
 
-def render_results(container, results_data):
-    """모노크롬 결과 카드 렌더링."""
+def render_results(container, results_data, on_reanalyze=None):
+    """모노크롬 결과 카드 렌더링.
+
+    on_reanalyze: 제공하면 "이 파일 다시 분석" 버튼(D-4)을 표시하고 클릭 시 호출.
+    """
     container.clear()
     with container:
         if not results_data:
             ui.html('<div style="color:var(--text-4);font-size:13px;text-align:center;'
                     'padding:20px;background:var(--bg-elev);border:1px solid var(--border);'
                     'border-radius:var(--radius);">검출된 수정 사항이 없습니다.</div>')
+            if on_reanalyze:
+                ui.button('이 파일 다시 분석', icon='refresh', on_click=on_reanalyze) \
+                    .classes('btn-primary-mono').style('margin-top:10px;width:100%;')
             return
 
-        ui.html(
-            f'<div style="font-size:12.5px;color:var(--text-3);margin:4px 0 12px;">'
-            f'총 <b style="color:var(--text);">{len(results_data)}개 섹션</b>에서 '
-            f'수정 사항이 발견되었습니다.</div>'
-        )
+        with ui.row().classes('items-center justify-between w-full').style('margin:4px 0 12px;'):
+            ui.html(
+                f'<div style="font-size:12.5px;color:var(--text-3);">'
+                f'총 <b style="color:var(--text);">{len(results_data)}개 섹션</b>에서 '
+                f'수정 사항이 발견되었습니다.</div>'
+            )
+            if on_reanalyze:
+                ui.button('다시 분석', icon='refresh', on_click=on_reanalyze) \
+                    .props('dense flat no-caps').style('font-size:11.5px;color:var(--text-3);')
 
         for res in results_data:
             errs = res.get('errors', [])
+            section_idx = res.get('section_idx')
+            jump_btn_html = (
+                f'<button class="result-action-btn jump-to-source-btn" type="button" '
+                f'data-scroll-target="anly-sec-{section_idx}" style="margin-left:auto;">'
+                '<span class="material-symbols-outlined">description</span>원문 보기</button>'
+                if section_idx is not None else ''
+            )
             html = (
                 '<details class="section-result" open>'
                 '<summary class="section-result-head">'
                 '<span class="material-symbols-outlined" style="font-size:16px;color:var(--text-3);">article</span>'
                 f'<span>{_html.escape(res["title"])}</span>'
                 f'<span class="count">{len(errs)}건</span>'
+                f'{jump_btn_html}'
                 '</summary>'
             )
             for er in errs:
@@ -936,6 +957,39 @@ def main_page(request: Request):
     ui.add_head_html(
         '<style>.is-disabled{opacity:.45;pointer-events:none;cursor:not-allowed;}</style>'
     )
+    # ux/screens 공통 진행 컴포넌트의 경과시간 실시간 갱신 (페이지당 1회)
+    ui.add_body_html(elapsed_ticker_script())
+
+    # D-4: 결과 오류 카드의 "원문 보기" 클릭 → 미리보기 컨테이너 scrollTop 직접
+    # 계산으로 이동 (scrollIntoView 금지 — 상위 레이아웃 스크롤을 깨뜨리는
+    # 문제가 있어 항상 컨테이너 내부 스크롤만 조정한다).
+    ui.add_body_html('''
+<script>
+(function(){
+  document.addEventListener('click', function(e){
+    const btn = e.target.closest('.jump-to-source-btn');
+    if (!btn) return;
+    // 결과 탭에서는 미리보기(원문)가 display:none 이므로, 실행 탭으로 먼저
+    // 전환한 뒤(다음 프레임) 컨테이너 내부 스크롤 위치를 계산한다.
+    document.getElementById('subtab-exec-btn')?.click();
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        const targetId = btn.getAttribute('data-scroll-target');
+        const target = document.getElementById(targetId);
+        if (!target) return;
+        const container = target.closest('.pane-body');
+        if (!container) return;
+        const delta = target.getBoundingClientRect().top - container.getBoundingClientRect().top;
+        container.scrollTop += delta;
+        target.style.transition = 'background-color .3s';
+        target.style.backgroundColor = 'rgba(14,165,233,.08)';
+        setTimeout(function(){ target.style.backgroundColor = ''; }, 1200);
+      });
+    });
+  });
+})();
+</script>
+''')
     _msm.load()   # 세션마다 최신 메뉴 상태 로드
 
     # LLM 백엔드 가용 여부 (탭 진입 팝업·버튼 비활성화에 사용)
@@ -1573,7 +1627,7 @@ def main_page(request: Request):
 
             # ── 서브탭: 분석 실행 / 분석 결과 (IWP-Redesign-B) ──────────────
             with ui.element('div').classes('sub-tab-bar'):
-                subtab_exec_btn = ui.element('button').classes('sub-tab active')
+                subtab_exec_btn = ui.element('button').classes('sub-tab active').props('id=subtab-exec-btn')
                 with subtab_exec_btn:
                     ui.html('분석 실행')
                 subtab_result_btn = ui.element('button').classes('sub-tab')
@@ -1608,6 +1662,28 @@ def main_page(request: Request):
                         )
 
                         with ui.element('div') as actions_el:
+                            # D-1: 파일 선택 → 분석유형 선택 → 실행 3단계 스텝퍼 + 선택 요약
+                            _ANALYSIS_STEPS = ['파일 선택', '분석유형 선택', '실행']
+                            step_summary_el = ui.html('')
+
+                            def _update_step_summary(running: bool = False):
+                                has_file = 0 <= analysis_sel[0] < len(analysis_files)
+                                idx = 2 if running else (1 if has_file else 0)
+                                n_files = len(analysis_files)
+                                sel_name = (
+                                    _html.escape(analysis_files[analysis_sel[0]]['name'])
+                                    if has_file else ''
+                                )
+                                summary = (
+                                    f'선택 파일: <b>{sel_name}</b> (전체 {n_files}개 업로드됨)'
+                                    if has_file else f'업로드된 파일 {n_files}개 — 먼저 파일을 업로드하세요'
+                                )
+                                step_summary_el.content = (
+                                    step_list_html(_ANALYSIS_STEPS, idx)
+                                    + f'<div class="muted-text" style="margin:-4px 0 4px;">{summary}</div>'
+                                )
+
+                            _update_step_summary()
                             ui.html('<div class="divider" style="margin:14px 0 12px;"></div>')
                             analysis_llm_chunk = ui.checkbox(
                                 'LLM 의미 단위 청킹 사용 (OFF: 볼드체 기반)',
@@ -1621,7 +1697,9 @@ def main_page(request: Request):
                             )
                             with ui.element('div').classes('action-row'):
                                 btn_proof = ui.button('오타 검수').classes('btn-primary-mono')
+                                btn_proof.tooltip('맞춤법·띄어쓰기·오탈자를 검사합니다. 예: "됬다"→"됐다"')
                                 btn_style = ui.button('Business Tone&Manner').classes('btn-primary-mono')
+                                btn_style.tooltip('비즈니스 문서에 맞는 격식·어조인지 검사합니다. 예: 구어체·반말 표현 검출')
 
                             ui.html('<div class="divider" style="margin:12px 0;"></div>')
 
@@ -1632,7 +1710,9 @@ def main_page(request: Request):
                             )
                             with ui.element('div').classes('action-row'):
                                 btn_logic_single = ui.button('파일별 논리검증').classes('btn-primary-mono')
+                                btn_logic_single.tooltip('선택한 파일 하나에서 문장 간 논리적 모순·비약을 검사합니다.')
                                 btn_logic_all    = ui.button('전체 논리검증').classes('btn-primary-mono')
+                                btn_logic_all.tooltip('업로드된 모든 파일에 대해 순차적으로 논리 검증을 실행합니다.')
 
                             ui.html('<div class="divider" style="margin:12px 0;"></div>')
                             btn_rerun_last = ui.button(
@@ -1646,6 +1726,18 @@ def main_page(request: Request):
                             state['_exec_context_labels'].append(exec_context_el)
 
                             status_label = ui.html('')
+                            # D-3: 진행 중 취소 버튼 (기본 숨김)
+                            analysis_cancel_btn = ui.button('취소', icon='close').classes('progress-cancel-btn')
+                            analysis_cancel_btn.visible = False
+                            analysis_run_ctl: dict = {'task': None, 'cancel_event': None}
+
+                            def _cancel_analysis_run():
+                                if analysis_run_ctl['cancel_event'] is not None:
+                                    analysis_run_ctl['cancel_event'].set()
+                                if analysis_run_ctl['task'] is not None:
+                                    analysis_run_ctl['task'].cancel()
+
+                            analysis_cancel_btn.on_click(_cancel_analysis_run)
 
                 # ── RIGHT pane — 문서 미리보기 / 분석 결과 ─────────────
                 with ui.element('div').classes('pane'):
@@ -1769,7 +1861,10 @@ def main_page(request: Request):
                     )
                 # 우측 결과
                 if an and an.get('errors') is not None:
-                    render_results(results_container, an['errors'])
+                    render_results(
+                        results_container, an['errors'],
+                        on_reanalyze=lambda: asyncio.create_task(run_analysis(tab_key)),
+                    )
                 else:
                     results_container.clear()
                     with results_container:
@@ -1840,6 +1935,7 @@ def main_page(request: Request):
                 # 좌·우 영역은 현재 active 탭 기준으로 렌더
                 _render_for_tab(fi)
                 _refresh_file_list()
+                _update_step_summary()
 
             def _remove_file(idx: int):
                 if idx < 0 or idx >= len(analysis_files):
@@ -1961,7 +2057,10 @@ def main_page(request: Request):
                             '<div class="preview-text">'
                             + annotated_html + '</div>'
                         )
-                        render_results(results_container, file_errors)
+                        render_results(
+                            results_container, file_errors,
+                            on_reanalyze=lambda: asyncio.create_task(run_analysis(analysis_type)),
+                        )
                         _switch_analysis_subtab('result')
 
                 try:
@@ -2040,7 +2139,7 @@ def main_page(request: Request):
                         )
                         safe_hl = escape_markdown_special_chars(highlighted_text)
                         annotated_html = textwrap.dedent(f"""
-                            <div style="margin-bottom:20px;">
+                            <div id="anly-sec-0" style="margin-bottom:20px;">
                                 <div style="font-size:13px;font-weight:600;
                                             color:var(--text,#0a0a0a);margin-bottom:6px;
                                             border-bottom:1px solid var(--border,#e7e5e4);
@@ -2049,7 +2148,7 @@ def main_page(request: Request):
                                             line-height:1.75;">{safe_hl}</div>
                             </div>
                         """).strip()
-                        file_errors = [{'title': '전체 문서', 'errors': errors}] if errors else []
+                        file_errors = [{'title': '전체 문서', 'errors': errors, 'section_idx': 0}] if errors else []
                         _commit(annotated_html, file_errors)
                         return file_errors
 
@@ -2087,14 +2186,17 @@ def main_page(request: Request):
                             title = section.get('title', '제목 없음')
                             if exc is not None:
                                 all_html_slots[idx] = (
+                                    f'<div id="anly-sec-{idx}">'
                                     f'<p style="color:#b91c1c;">[{_html.escape(title)}] '
-                                    f'Error: {type(exc).__name__}: {exc}</p>'
+                                    f'Error: {type(exc).__name__}: {exc}</p></div>'
                                 )
                             else:
                                 section_html, errors = result
-                                all_html_slots[idx] = section_html
+                                # D-4: 원문 미리보기에서 이 섹션으로 점프할 수 있도록 id 부여
+                                # (analyze_one_section 자체는 건드리지 않고 결과만 감쌈)
+                                all_html_slots[idx] = f'<div id="anly-sec-{idx}">{section_html}</div>'
                                 if errors:
-                                    file_errors.append({'title': title, 'errors': errors})
+                                    file_errors.append({'title': title, 'errors': errors, 'section_idx': idx})
 
                             # 상태 + 부분 결과 실시간 표시
                             status_label.content = _spinner_html(
@@ -2173,21 +2275,26 @@ def main_page(request: Request):
                     analysis_sel[0] = target_idx
                 _switch_analysis_tab(analysis_type)
                 results_container.clear()
-                status_label.content = (
-                    '<div style="display:flex;align-items:center;gap:8px;'
-                    'color:var(--text-3);font-size:13px;padding:8px 0;">'
-                    '<span class="material-symbols-outlined" '
-                    'style="font-size:16px;animation:spin 1.2s linear infinite;">'
-                    f'progress_activity</span>{ANALYSIS_LABEL[analysis_type]} 중…</div>'
-                )
-                await _run_on_file(analysis_type, target_fi)
-                # 분석 후 파일·미리보기 유지 (사용자가 X 버튼으로만 제거)
-                _refresh_file_list()
-                status_label.content = ''
-                ui.notify(
-                    f'{ANALYSIS_LABEL[analysis_type]} 완료 — 우측 탭에서 결과를 확인하세요.',
-                    type='positive', position='top',
-                )
+                status_label.content = progress_block_html(f'{ANALYSIS_LABEL[analysis_type]} 중…')
+                analysis_cancel_btn.visible = True
+                analysis_run_ctl['task'] = asyncio.current_task()
+                _update_step_summary(running=True)
+                try:
+                    await _run_on_file(analysis_type, target_fi)
+                    # 분석 후 파일·미리보기 유지 (사용자가 X 버튼으로만 제거)
+                    _refresh_file_list()
+                    status_label.content = ''
+                    ui.notify(
+                        f'{ANALYSIS_LABEL[analysis_type]} 완료 — 우측 탭에서 결과를 확인하세요.',
+                        type='positive', position='top',
+                    )
+                except asyncio.CancelledError:
+                    status_label.content = ''
+                    ui.notify(f'{ANALYSIS_LABEL[analysis_type]}이(가) 취소되었습니다.', type='warning', position='top')
+                finally:
+                    analysis_cancel_btn.visible = False
+                    analysis_run_ctl['task'] = None
+                    _update_step_summary(running=False)
 
             async def run_logic_all():
                 if not llm_status.guard():
