@@ -47,12 +47,22 @@ def convert_to_pdf_linux(input_path, output_folder):
     except Exception as e:
         return False, str(e)
 
-def batch_convert_to_pdf(target_folder):
+def batch_convert_to_pdf(target_folder, log_queue=None):
     """
     지정된 폴더 내의 Word, PPT 파일을 모두 찾아 PDF로 변환합니다.
+
+    log_queue: queue.Queue 전달 시 ppt_word2pdf.convert_each_to_pdf 와 동일한
+               형식으로 각 파일 결과를 ('success'|'error', 파일명, 오류메시지) 로
+               put 하고, 완료 후 ('done', '', '') 을 put 한다. (app.py/agent_console.py
+               가 이 큐를 폴링하므로 두 변환 엔진의 호출 규약을 통일해야 한다.)
     """
+    def _put(status, fname, msg):
+        if log_queue is not None:
+            log_queue.put((status, fname, msg))
+
     if not os.path.exists(target_folder):
-        yield "Error", f"폴더를 찾을 수 없습니다: {target_folder}"
+        _put('error', '', f'폴더를 찾을 수 없습니다: {target_folder}')
+        _put('done', '', '')
         return
 
     # 결과가 저장될 폴더 (원본폴더/pdf_output)
@@ -64,18 +74,16 @@ def batch_convert_to_pdf(target_folder):
     files = [f for f in os.listdir(target_folder) if f.lower().endswith(extensions) and not f.startswith('~$')]
 
     if not files:
-        yield "Info", "변환할 지원 파일(.docx, .pptx 등)이 없습니다."
+        _put('done', '', '')
         return
-
-    yield "Info", f"총 {len(files)}개의 파일을 변환합니다. 결과 저장 경로: {output_folder}"
 
     for file in files:
         input_path = os.path.join(target_folder, file)
-        yield "Progress", f"변환 중: {file}..."
-
         success, msg = convert_to_pdf_linux(input_path, output_folder)
 
         if success:
-            yield "Success", f"[성공] {file}"
+            _put('success', file, '')
         else:
-            yield "Error", f"[실패] {file} : {msg}"
+            _put('error', file, msg)
+
+    _put('done', '', '')
