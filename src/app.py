@@ -64,7 +64,7 @@ from langchain_core.output_parsers import StrOutputParser
 
 from read_docx_util import read_docx, read_file_with_llm_chunks
 from highlighting import highlight_errors
-from summarizer import hierarchical_summarize, compress_document, create_compressed_docx
+from summarizer import hierarchical_summarize, compress_document, create_compressed_docx, OperationCancelled
 from reporting_panel import build_reporting_panel
 from legal_panel import build_legal_panel
 from outlook_panel import build_outlook_panel
@@ -2578,6 +2578,21 @@ def _build_summary_panel(parent, state):
                     ).style('margin-top:8px;')
                     state['_exec_context_labels'].append(summary_exec_context_el)
                     summary_status = ui.html('')
+                    # Phase 2 후속: 요약/축약 진행 중 취소 버튼 (기본 숨김)
+                    summary_cancel_btn = ui.button('취소', icon='close') \
+                        .props('flat dense no-caps') \
+                        .classes('progress-cancel-btn') \
+                        .style('margin-top:6px;')
+                    summary_cancel_btn.visible = False
+                    summary_run_ctl = {'task': None, 'cancel_event': None}
+
+                    def _cancel_summary_run():
+                        if summary_run_ctl['cancel_event'] is not None:
+                            summary_run_ctl['cancel_event'].set()
+                        if summary_run_ctl['task'] is not None:
+                            summary_run_ctl['task'].cancel()
+
+                    summary_cancel_btn.on_click(_cancel_summary_run)
 
             # RIGHT — 원문 미리보기 + 요약 결과
             with ui.element('div').classes('pane'):
@@ -2607,11 +2622,17 @@ def _build_summary_panel(parent, state):
                             return
                         log.info('문서 요약 시작: %s', state.get('summary_file_name'))
                         import time as _t
+                        import threading as _threading
                         _start_t = _t.monotonic()
                         _start_epoch = _t.time()
 
                         def _spin(msg: str) -> str:
                             return progress_block_html(msg, start_ts=_start_epoch)
+
+                        cancel_event = _threading.Event()
+                        summary_run_ctl['cancel_event'] = cancel_event
+                        summary_run_ctl['task'] = asyncio.current_task()
+                        summary_cancel_btn.visible = True
 
                         summary_status.content = _spin(
                             'LLM 의미 단위 청킹 중… (1단계)'
@@ -2659,6 +2680,7 @@ def _build_summary_panel(parent, state):
                             result = await nicegui_run.io_bound(
                                 hierarchical_summarize,
                                 state['summary_file_path'], llm, _on_progress, cfg,
+                                cancel_event,
                             )
                             # 텍스트 추출 실패(.hwp 등) → 빈 결과면 명확히 안내하고 중단
                             if not result.get('section_summaries'):
@@ -2708,9 +2730,16 @@ def _build_summary_panel(parent, state):
                             # 원본 파일·미리보기·파일 카드는 유지하여 사용자가 원문을 계속 확인할 수 있도록 함.
                             # 업로드 위젯만 reset 하여 같은 세션에서 새 파일 업로드 가능.
                             _reset_summary_upload_only()
+                        except (asyncio.CancelledError, OperationCancelled):
+                            summary_status.content = ''
+                            ui.notify('요약이 취소되었습니다.', type='warning', position='top')
                         except Exception as e:
                             summary_status.content = ''
                             ui.notify(f'요약 오류: {e}', type='negative', position='top')
+                        finally:
+                            summary_cancel_btn.visible = False
+                            summary_run_ctl['cancel_event'] = None
+                            summary_run_ctl['task'] = None
 
                     async def run_compress():
                         if not llm_status.guard():
@@ -2721,6 +2750,11 @@ def _build_summary_panel(parent, state):
                             return
                         log.info('분량 축약 시작: %s', state.get('summary_file_name'))
                         import time as _t
+                        import threading as _threading
+                        cancel_event = _threading.Event()
+                        summary_run_ctl['cancel_event'] = cancel_event
+                        summary_run_ctl['task'] = asyncio.current_task()
+                        summary_cancel_btn.visible = True
                         summary_status.content = progress_block_html(
                             '분량 축약 중…', start_ts=_t.time()
                         )
@@ -2733,6 +2767,7 @@ def _build_summary_panel(parent, state):
                             result = await nicegui_run.io_bound(
                                 compress_document,
                                 state['summary_file_path'], llm, None, None,
+                                cancel_event,
                             )
                             # 텍스트 추출 실패(.hwp 등) → 빈 섹션이면 빈 문서 생성 대신 안내하고 중단
                             if not result.get('sections'):
@@ -2797,9 +2832,16 @@ def _build_summary_panel(parent, state):
                             )
                             # 원본 파일·미리보기·파일 카드는 유지. 출력 DOCX는 다운로드용으로 보관.
                             _reset_summary_upload_only()
+                        except (asyncio.CancelledError, OperationCancelled):
+                            summary_status.content = ''
+                            ui.notify('분량 축약이 취소되었습니다.', type='warning', position='top')
                         except Exception as e:
                             summary_status.content = ''
                             ui.notify(f'축약 오류: {e}', type='negative', position='top')
+                        finally:
+                            summary_cancel_btn.visible = False
+                            summary_run_ctl['cancel_event'] = None
+                            summary_run_ctl['task'] = None
 
                     btn_summary.on_click(run_summary)
                     btn_compress.on_click(run_compress)

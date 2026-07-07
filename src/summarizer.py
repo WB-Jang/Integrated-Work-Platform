@@ -1,5 +1,6 @@
 import re
 import shutil
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from langchain_core.prompts import PromptTemplate
@@ -8,6 +9,14 @@ from read_docx_util import read_docx, read_file_sections, read_file_with_llm_chu
 from logger import get_logger
 
 log = get_logger("summarizer")
+
+
+class OperationCancelled(Exception):
+    """사용자가 [취소] 버튼으로 작업을 중단했을 때 발생.
+
+    이미 전송된 LLM 요청 자체를 중간에 끊지는 못하지만(스레드 강제 종료 불가),
+    다음 섹션/단계로 진행하기 전 체크포인트에서 조기 종료해 불필요한 LLM 호출을
+    막는다 — Phase 2 스펙의 "flag-based result-discarding" 방식."""
 
 # 표 마커 패턴 (read_docx_util._table_to_text 가 삽입하는 형식)
 _TABLE_RE = re.compile(r"\[Table Start\].*?\[Table End\]", re.DOTALL)
@@ -48,11 +57,17 @@ def get_compress_chain(llm):
     return prompt | llm | StrOutputParser()
 
 
-def compress_document(file_path, llm, progress_callback=None, config: dict | None = None):
+def compress_document(
+    file_path, llm, progress_callback=None, config: dict | None = None,
+    cancel_event: threading.Event | None = None,
+):
     """
     각 섹션의 텍스트(표 제외)를 LLM으로 압축합니다.
     표가 포함된 섹션은 표 외 텍스트만 압축하고, 표 마크업은 그대로 보존합니다.
     원본 구조와 1:1 매핑이 필요하므로 섹션 순서를 유지하며 병렬 처리합니다.
+
+    cancel_event 가 set 되면 다음 섹션 완료 체크포인트에서 OperationCancelled 를
+    발생시켜 남은 섹션 처리를 건너뛴다.
     """
     if config:
         sections = read_file_with_llm_chunks(file_path, config)
@@ -106,6 +121,8 @@ def compress_document(file_path, llm, progress_callback=None, config: dict | Non
             current_step[0] += 1
             if progress_callback:
                 progress_callback(current_step[0], total_steps, f"축약 중: {res['title']}")
+            if cancel_event is not None and cancel_event.is_set():
+                raise OperationCancelled("사용자 취소 (섹션 축약 중)")
 
     total_orig = sum(s["original_chars"] for s in compressed_sections)
     total_comp = sum(s["compressed_chars"] for s in compressed_sections)
@@ -302,8 +319,14 @@ SINGLE_CALL_CHARS_THRESHOLD    = 3000
 SECTION_PARALLEL_WORKERS = 8
 
 
-def hierarchical_summarize(file_path, llm, progress_callback=None, config: dict | None = None):
-    """계층적 요약. 짧은 문서는 단일 호출, 긴 문서는 섹션 병렬 처리."""
+def hierarchical_summarize(
+    file_path, llm, progress_callback=None, config: dict | None = None,
+    cancel_event: threading.Event | None = None,
+):
+    """계층적 요약. 짧은 문서는 단일 호출, 긴 문서는 섹션 병렬 처리.
+
+    cancel_event 가 set 되면 다음 체크포인트(섹션/그룹 완료 시점)에서
+    OperationCancelled 를 발생시켜 남은 단계(다음 섹션·combine)를 건너뛴다."""
     if config:
         sections = read_file_with_llm_chunks(file_path, config)
     else:
@@ -331,6 +354,8 @@ def hierarchical_summarize(file_path, llm, progress_callback=None, config: dict 
         partial = []
         try:
             for token in single_chain.stream({"text": full_text}):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise OperationCancelled("사용자 취소 (단일 호출 스트리밍 중)")
                 if token:
                     partial.append(token)
                     if progress_callback:
@@ -339,6 +364,8 @@ def hierarchical_summarize(file_path, llm, progress_callback=None, config: dict 
                             f"__STREAM__{''.join(partial)}",
                         )
             final_summary = ''.join(partial)
+        except OperationCancelled:
+            raise
         except Exception:
             # 스트리밍 미지원/오류 → invoke 폴백
             if progress_callback:
@@ -384,11 +411,18 @@ def hierarchical_summarize(file_path, llm, progress_callback=None, config: dict 
                     current_step, total_steps,
                     f"섹션 요약 중: {summ['title']}",
                 )
+            if cancel_event is not None and cancel_event.is_set():
+                # 이미 제출된 나머지 futures는 백그라운드에서 계속 실행되지만
+                # (스레드 강제 종료 불가) 결과는 버리고 combine 단계를 건너뛴다.
+                raise OperationCancelled("사용자 취소 (섹션 요약 중)")
 
     # None (실패 등) 제거
     section_summaries = [s for s in section_summaries if s]
 
     # ── combine 단계 ──────────────────────────────────────────────────
+    if cancel_event is not None and cancel_event.is_set():
+        raise OperationCancelled("사용자 취소 (combine 단계 진입 전)")
+
     GROUP_SIZE = 3
     if len(section_summaries) > GROUP_SIZE:
         # 중간 요약도 병렬 처리
