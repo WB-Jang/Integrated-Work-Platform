@@ -4,13 +4,40 @@
 좌측 필터(모드 토글: 기관별 / 연합뉴스) · 우측 결과 리스트 + 메일 발송.
 """
 import html as _html
+import re
+import time as _time
 
 from nicegui import ui, run as nicegui_run, app as nicegui_app
 
 from logger import get_logger, set_current_user
 import activity_log
+from outlook_panel import _is_outlook_available, _OUTLOOK_UNAVAILABLE_MSG
+from ui_styles import progress_block_html, step_list_html, elapsed_ticker_script
 
 log = get_logger("regulatory_panel")
+
+_YNA_STEPS = ['키워드 추출', '기사 수집', '유사도 재정렬', '기사 요약', '클러스터링', '통합 답변']
+
+# YYYYMMDD, YYYY.MM.DD, YYYY/MM/DD 등을 YYYY-MM-DD 로 정규화
+_DATE_DIGITS_RE = re.compile(r'^\s*(\d{4})[.\-/]?(\d{2})[.\-/]?(\d{2})\s*$')
+
+
+def _normalize_date(raw: str) -> tuple[str, bool]:
+    """입력 문자열을 YYYY-MM-DD 로 정규화. (정규화된 문자열, 유효 여부) 반환.
+    빈 문자열은 유효한 것으로 취급(선택 입력이므로)."""
+    raw = (raw or '').strip()
+    if not raw:
+        return '', True
+    m = _DATE_DIGITS_RE.match(raw)
+    if not m:
+        return raw, False
+    y, mo, d = m.groups()
+    try:
+        import datetime as _dt
+        _dt.date(int(y), int(mo), int(d))
+    except ValueError:
+        return raw, False
+    return f'{y}-{mo}-{d}', True
 
 
 def _apply_current_user() -> None:
@@ -61,9 +88,9 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             )
 
             ui.html('<div class="muted-label">검색 방식</div>')
-            with ui.row().classes('gap-2 mb-4 w-full no-wrap'):
-                btn_agency = ui.button('기관별 모니터링').classes('btn-primary-mono flex-1')
-                btn_yna    = ui.button('뉴스 검색').classes('btn-primary-mono flex-1')
+            with ui.row().classes('segmented mb-4 w-full no-wrap gap-0'):
+                btn_agency = ui.button('기관별 모니터링').props('flat no-caps').classes('btn-mono flex-1 is-active')
+                btn_yna    = ui.button('뉴스 검색').props('flat no-caps').classes('btn-mono flex-1')
 
             # ── 기관별 모드 UI ───────────────────────────────────────────
             agency_panel = ui.element('div')
@@ -93,9 +120,28 @@ def build_regulatory_panel(config: dict, create_llm_fn):
                 date_from_input = ui.input(
                     label='시작일 (YYYY-MM-DD 또는 YYYYMMDD)', placeholder='예: 2025-01-01 또는 20250101',
                 ).props('outlined dense').classes('w-full mb-2')
+                date_from_err = ui.html('').style('margin:-4px 0 6px 2px;')
                 date_to_input = ui.input(
                     label='종료일 (YYYY-MM-DD 또는 YYYYMMDD)', placeholder='예: 2025-12-31 또는 20251231',
                 ).props('outlined dense').classes('w-full mb-2')
+                date_to_err = ui.html('').style('margin:-4px 0 6px 2px;')
+
+                def _make_date_blur_handler(inp, err_el):
+                    def _on_blur():
+                        normalized, ok = _normalize_date(inp.value)
+                        if not ok:
+                            err_el.content = (
+                                '<div style="font-size:11px;color:var(--danger);">'
+                                '인식할 수 없는 날짜 형식입니다 (예: 2025-01-01, 20250101)</div>'
+                            )
+                            return
+                        inp.value = normalized
+                        err_el.content = ''
+                    return _on_blur
+
+                date_from_input.on('blur', _make_date_blur_handler(date_from_input, date_from_err))
+                date_to_input.on('blur', _make_date_blur_handler(date_to_input, date_to_err))
+
                 yna_count_input = ui.number(
                     label='최대 조회 건수', value=10, min=1, max=30, step=1,
                 ).props('outlined dense').classes('w-full mb-3')
@@ -107,19 +153,38 @@ def build_regulatory_panel(config: dict, create_llm_fn):
 
         # ── 우측: 결과 ───────────────────────────────────────────────────
         with ui.element('div').classes('result-col'):
-            result_count_label = ui.html(
+            _empty_state_html = (
                 '<div class="muted-text">조회 조건을 설정하고 검색을 클릭하세요.</div>'
+                '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;">'
+                '<span class="tag solid">최근 기준금리 변동 요약</span>'
+                '<span class="tag solid">가계부채 관련 규제 동향</span>'
+                '<span class="tag solid">최근 금융위 보도자료</span>'
+                '</div>'
+                '<div style="margin-top:8px;font-size:11.5px;color:var(--text-4);">'
+                '기관별 모니터링: 금감원·한은·금융위 보도자료를 자동 수집·요약합니다.<br>'
+                '뉴스 검색: 질문을 입력하면 관련 뉴스를 찾아 통합 답변을 생성합니다.</div>'
             )
+            result_count_label = ui.html(_empty_state_html)
 
-            fetch_progress = ui.linear_progress().props('indeterminate').classes('w-full mt-2 mb-2')
-            fetch_progress.visible = False
+            progress_area = ui.html('')
+            skeleton_area = ui.column().classes('w-full mt-2 gap-0')
+            skeleton_area.visible = False
 
             result_container = ui.column().classes('w-full mt-2').style('flex:1; overflow:auto;')
 
             ui.html('<div class="divider"></div>')
             with ui.row().classes('w-full items-center gap-3'):
                 send_btn = ui.button('Outlook 메일 발송').classes('btn-primary-mono')
+                if not _is_outlook_available():
+                    send_btn.props('disable')
+                    send_btn.tooltip('로컬 Outlook(Windows) 환경 전용 — 현재 환경에서는 발송할 수 없습니다.')
                 send_status = ui.html('<div class="muted-text"></div>')
+                if not _is_outlook_available():
+                    send_status.content = (
+                        f'<div class="muted-text" style="font-size:11px;">{_html.escape(_OUTLOOK_UNAVAILABLE_MSG)}</div>'
+                    )
+
+    ui.add_body_html(elapsed_ticker_script())
 
     # ─── 모드 전환 ───────────────────────────────────────────────────────
 
@@ -128,13 +193,13 @@ def build_regulatory_panel(config: dict, create_llm_fn):
         if mode == 'agency':
             agency_panel.visible = True
             yna_panel.visible = False
-            btn_agency.classes(remove='btn-primary-mono', add='btn-primary-mono')
-            btn_yna.classes(remove='btn-primary-mono', add='btn-primary-mono')
+            btn_agency.classes(add='is-active')
+            btn_yna.classes(remove='is-active')
         else:
             agency_panel.visible = False
             yna_panel.visible = True
-            btn_agency.classes(remove='btn-primary-mono', add='btn-primary-mono')
-            btn_yna.classes(remove='btn-primary-mono', add='btn-primary-mono')
+            btn_agency.classes(remove='is-active')
+            btn_yna.classes(add='is-active')
 
     btn_agency.on_click(lambda: _set_mode('agency'))
     btn_yna.on_click(lambda: _set_mode('news'))
@@ -271,19 +336,17 @@ def build_regulatory_panel(config: dict, create_llm_fn):
         naver_client_id   = config.get('naver_client_id', '').strip()
         naver_client_secret = config.get('naver_client_secret', '').strip()
 
-        import time as _t
-        _start_ts = _t.time()
-        fetch_progress.visible = True
+        _start_ts = _time.time()
         fetch_btn_agency.props(add='disable')
-        fetch_status_agency.content = (
-            '<div class="muted-text" style="margin-top:8px;display:flex;align-items:center;gap:8px;">'
-            '수집 및 분석 중… '
-            f'<span class="progress-block-elapsed" data-elapsed-since="{_start_ts}">0초 경과</span></div>'
-        )
+        fetch_status_agency.content = ''
+        progress_area.content = progress_block_html('수집 및 분석 중…', start_ts=_start_ts)
         result_container.clear()
-        result_count_label.content = (
-            '<div class="muted-text">분석 중…</div>'
-        )
+        result_count_label.content = ''
+        skeleton_area.visible = True
+        skeleton_area.clear()
+        with skeleton_area:
+            for _ in range(3):
+                ui.html('<div class="skeleton-card"></div>')
 
         try:
             llm = create_llm_fn()
@@ -297,19 +360,17 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             result_count_label.content = (
                 f'<div class="info-block"><b>조회 결과: {len(results)}건</b></div>'
             )
-            fetch_status_agency.content = (
-                f'<div class="muted-text" style="margin-top:8px;">{len(results)}건 완료</div>'
-            )
+            progress_area.content = ''
             ui.notify(f'{len(results)}건 분석 완료', type='positive', position='top')
             activity_log.record('regulatory', '금감원 보도자료 조회', detail=f'{len(results)}건', status='done')
         except Exception as e:
             log.error('기관별 조회 오류: %s', e)
             ui.notify(f'조회 오류: {e}', type='negative', position='top')
-            fetch_status_agency.content = (
-                '<div class="muted-text" style="margin-top:8px;color:var(--danger);">조회 실패</div>'
+            progress_area.content = (
+                '<div class="muted-text" style="color:var(--danger);">조회 실패</div>'
             )
         finally:
-            fetch_progress.visible = False
+            skeleton_area.visible = False
             fetch_btn_agency.props(remove='disable')
 
     # ─── 뉴스 검색 ──────────────────────────────────────────────────────
@@ -322,30 +383,42 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             return
         log.info('규제동향(뉴스검색) 질의: %s', question[:120])
 
-        date_from = (date_from_input.value or '').strip() or None
-        date_to   = (date_to_input.value or '').strip() or None
+        date_from_norm, from_ok = _normalize_date(date_from_input.value)
+        date_to_norm, to_ok = _normalize_date(date_to_input.value)
+        if not from_ok or not to_ok:
+            ui.notify('날짜 형식을 확인하세요 (예: 2025-01-01, 20250101).', type='warning', position='top')
+            return
+        date_from_input.value = date_from_norm
+        date_to_input.value = date_to_norm
+        date_from = date_from_norm or None
+        date_to   = date_to_norm or None
         count     = int(yna_count_input.value or 10)
         naver_client_id     = config.get('naver_client_id', '').strip()
         naver_client_secret = config.get('naver_client_secret', '').strip()
 
-        import time as _t
-        _yna_start_ts = _t.time()
+        _start_ts = _time.time()
+        fetch_btn_yna.props(add='disable')
+        fetch_status_yna.content = ''
+        result_container.clear()
+        result_count_label.content = ''
+        skeleton_area.visible = True
+        skeleton_area.clear()
+        with skeleton_area:
+            for _ in range(3):
+                ui.html('<div class="skeleton-card"></div>')
 
-        def _yna_status(msg: str) -> str:
-            return (
-                f'<div class="muted-text" style="margin-top:8px;display:flex;'
-                f'align-items:center;gap:8px;">{msg} '
-                f'<span class="progress-block-elapsed" data-elapsed-since="{_yna_start_ts}">'
-                '0초 경과</span></div>'
+        def _step(idx: int, extra: str = '') -> None:
+            elapsed_span = (
+                f'<span class="progress-block-elapsed" data-elapsed-since="{_start_ts}">'
+                '0초 경과</span>'
+            )
+            progress_area.content = (
+                step_list_html(_YNA_STEPS, idx)
+                + f'<div class="muted-text" style="display:flex;align-items:center;gap:8px;">'
+                f'{extra}{elapsed_span}</div>'
             )
 
-        fetch_progress.visible = True
-        fetch_btn_yna.props(add='disable')
-        fetch_status_yna.content = _yna_status('키워드 추출 중…')
-        result_container.clear()
-        result_count_label.content = (
-            '<div class="muted-text">키워드 추출 중…</div>'
-        )
+        _step(0)
 
         try:
             llm = create_llm_fn()
@@ -366,9 +439,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             search_queries = await nicegui_run.io_bound(
                 extract_search_queries, question, llm, 5,
             )
-            fetch_status_yna.content = _yna_status(
-                f'검색 중… (표현: {", ".join(search_queries)})'
-            )
+            _step(1, f'검색 표현: {_html.escape(", ".join(search_queries))} · ')
 
             # 2) 검색 표현으로 뉴스 후보 수집 (네이버→BIGKinds→연합뉴스 RSS 순)
             fetch_count = min(count * 3, 30)
@@ -379,9 +450,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
 
             # 3) BGE-M3 질문-기사 유사도 재정렬(항상 수행 → 관련성 점수 확보) + 임계값 판정
             if items:
-                fetch_status_yna.content = _yna_status(
-                    f'{len(items)}건 후보 중 의미 유사도 재정렬…'
-                )
+                _step(2, f'{len(items)}건 후보 · ')
                 items = await nicegui_run.io_bound(
                     rerank_by_question,
                     question, items, embed_url, embed_model, embed_timeout, count,
@@ -418,7 +487,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
                 )
 
             # 4) 각 기사 LLM 요약
-            fetch_status_yna.content = _yna_status(f'{len(items)}건 요약 중…')
+            _step(3, f'{len(items)}건 · ')
 
             def _summarize_all(items_, llm_):
                 out = []
@@ -435,6 +504,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             # 5) 클러스터링 + 질문 유사도 기반 정렬
             clustered = False
             if len(results) >= 3:
+                _step(4)
                 results = await nicegui_run.io_bound(
                     cluster_news_results,
                     results, question, embed_url, embed_model, embed_timeout,
@@ -444,7 +514,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             # 6) 클러스터별 대표 기사로 질문 통합 답변 생성
             answer_summary = ''
             if results:
-                fetch_status_yna.content = _yna_status('통합 답변 생성 중…')
+                _step(5)
                 answer_summary = await nicegui_run.io_bound(
                     summarize_clusters_for_question, question, results, llm, approximate,
                 )
@@ -469,9 +539,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
                 f'<div class="info-block"><b>뉴스 검색 결과: {len(results)}건{cluster_info}</b>'
                 f'{approx_note} (검색 표현: {_html.escape(kws_str)})</div>'
             )
-            fetch_status_yna.content = (
-                f'<div class="muted-text" style="margin-top:8px;">{len(results)}건 완료</div>'
-            )
+            progress_area.content = ''
             if results:
                 ui.notify(f'{len(results)}건 검색·요약 완료', type='positive', position='top')
             else:
@@ -479,11 +547,11 @@ def build_regulatory_panel(config: dict, create_llm_fn):
         except Exception as e:
             log.error('연합뉴스 검색 오류: %s', e)
             ui.notify(f'검색 오류: {e}', type='negative', position='top')
-            fetch_status_yna.content = (
-                '<div class="muted-text" style="margin-top:8px;color:#b91c1c;">검색 실패</div>'
+            progress_area.content = (
+                '<div class="muted-text" style="color:var(--danger);">검색 실패</div>'
             )
         finally:
-            fetch_progress.visible = False
+            skeleton_area.visible = False
             fetch_btn_yna.props(remove='disable')
 
     # ─── 메일 발송 ──────────────────────────────────────────────────────

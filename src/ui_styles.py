@@ -11,6 +11,8 @@ Claude Design "IWP-Redesign-B" 목업을 기준으로 한 다크 네이비 팔�
     inject_global_css()   # @ui.page 핸들러 안에서 호출
 """
 
+import html as _html
+
 from nicegui import ui
 
 
@@ -312,52 +314,14 @@ html body #main-nav * {
 .status-banner-dismiss:hover { color: var(--text-2); }
 .status-banner-dismiss .material-symbols-outlined { font-size: 16px; }
 
-/* ── Phase 2: 공통 진행 상태(progress) 컴포넌트 ──────────────────────── */
-.progress-block {
-  display: flex; align-items: center; gap: 10px; padding: 10px 0;
-  color: var(--text-3); font-size: 13px;
-}
-.progress-block .material-symbols-outlined.spin {
-  font-size: 16px; animation: spin 1.2s linear infinite; flex-shrink: 0;
-}
-.progress-block-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.progress-block-label {
-  display: flex; align-items: baseline; gap: 8px; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis;
-}
-.progress-block-elapsed { color: var(--text-4); font-size: 11.5px; flex-shrink: 0; }
-.progress-bar-track {
-  width: 100%; height: 4px; border-radius: 2px; background: var(--border);
-  overflow: hidden; position: relative;
-}
-.progress-bar-fill {
-  position: absolute; top: 0; left: 0; height: 100%; border-radius: 2px;
-  background: var(--accent); animation: indeterminate 1.4s ease-in-out infinite;
-}
-.progress-cancel-btn {
-  flex-shrink: 0; display: flex; align-items: center; gap: 4px;
-  background: transparent !important; border: 1px solid var(--border) !important;
-  color: var(--text-3); cursor: pointer; font-size: 11.5px; font-weight: 500;
-  padding: 4px 9px; border-radius: var(--radius); box-shadow: none !important;
-}
-.progress-cancel-btn:hover { color: var(--danger); border-color: rgba(239,68,68,.4) !important; }
-.progress-cancel-btn .material-symbols-outlined { font-size: 14px; margin-right: 0; }
-
 /* ── Phase 2: 실행 버튼 옆 모델 컨텍스트 라벨 ────────────────────────── */
+/* .progress-block 등 공통 진행 컴포넌트 CSS는 파일 하단
+   "ux/screens 공통 컴포넌트" 섹션에 통합되어 있음 (중복 제거). */
 .exec-context-label {
   font-size: 11px; color: var(--text-4); display: flex; align-items: center; gap: 4px;
 }
 .exec-context-label .material-symbols-outlined { font-size: 13px; }
 .exec-context-label b { color: var(--text-3); font-weight: 600; }
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-    scroll-behavior: auto !important;
-  }
-}
 
 /* 서브탭 — 문서분석/요약/Q&A 등의 "실행/결과" 전환 바 */
 .sub-tab-bar {
@@ -1550,6 +1514,130 @@ html body .q-btn.btn-mono.active .q-btn__content * {
   background: var(--border-strong); border-radius: 4px;
 }
 *::-webkit-scrollbar-thumb:hover { background: var(--text-4); }
+
+/* ─────────────────────────────────────────────────────────
+   ux/screens 공통 컴포넌트 — 진행 상태(취소 가능) · 스텝퍼 · 체크리스트
+   (A~D 전 패널에서 재사용. 새 색상 없이 기존 토큰만 사용)
+   ───────────────────────────────────────────────────────── */
+.progress-block {
+  display: flex; align-items: center; gap: 10px; padding: 10px 0;
+  color: var(--text-3); font-size: 13px;
+}
+.progress-block .material-symbols-outlined.spin {
+  font-size: 16px; animation: spin 1.2s linear infinite; flex-shrink: 0;
+}
+.progress-block-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.progress-block-label {
+  display: flex; align-items: baseline; gap: 8px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.progress-block-elapsed { color: var(--text-4); font-size: 11.5px; flex-shrink: 0; }
+.progress-bar-track {
+  width: 100%; height: 4px; border-radius: 2px; background: var(--border);
+  overflow: hidden; position: relative;
+}
+.progress-bar-fill {
+  position: absolute; top: 0; left: 0; height: 100%; border-radius: 2px;
+  background: var(--accent); animation: indeterminate 1.4s ease-in-out infinite;
+}
+.progress-cancel-btn {
+  flex-shrink: 0; display: flex; align-items: center; gap: 4px;
+  background: transparent !important; border: 1px solid var(--border) !important;
+  color: var(--text-3); cursor: pointer; font-size: 11.5px; font-weight: 500;
+  padding: 4px 9px; border-radius: var(--radius); box-shadow: none !important;
+}
+.progress-cancel-btn:hover { color: var(--danger); border-color: rgba(239,68,68,.4) !important; }
+.progress-cancel-btn .material-symbols-outlined { font-size: 14px; margin-right: 0; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes indeterminate {
+  0%   { transform: translateX(-60%); width: 40%; }
+  50%  { transform: translateX(40%);  width: 55%; }
+  100% { transform: translateX(160%); width: 40%; }
+}
+
+/* 스켈레톤 카드 (대기 상태 placeholder) */
+.skeleton-card {
+  height: 68px; border-radius: var(--radius); background: var(--bg-elev);
+  border: 1px solid var(--border); margin-bottom: 8px; position: relative;
+  overflow: hidden;
+}
+.skeleton-card::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.04), transparent);
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* 다단계 스텝퍼 (규제동향 6단계 / 보고서 FX5260 4단계 / 문서분석 3단계) */
+.step-list {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0;
+  padding: 12px 0; margin-bottom: 4px;
+}
+.step-item {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--text-4); white-space: nowrap;
+  padding: 4px 0;
+}
+.step-item .step-dot {
+  width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700;
+  border: 1.5px solid var(--border-strong); color: var(--text-4);
+}
+.step-item.done .step-dot {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.step-item.active .step-dot {
+  border-color: var(--accent); color: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.step-item.done span.step-label,
+.step-item.active span.step-label { color: var(--text); }
+.step-connector {
+  width: 18px; height: 1.5px; background: var(--border-strong);
+  margin: 0 4px; flex-shrink: 0;
+}
+.step-connector.done { background: var(--accent); }
+
+/* 실행 전 필수 항목 체크리스트 */
+.req-checklist {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px; background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 10px;
+}
+.req-item { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-3); }
+.req-item .material-symbols-outlined { font-size: 15px; flex-shrink: 0; }
+.req-item.ok { color: var(--text-2); }
+.req-item.ok .material-symbols-outlined { color: var(--success); }
+.req-item.missing .material-symbols-outlined { color: var(--text-4); }
+
+/* 세그먼트 컨트롤 (붙은 두 버튼 — 모드 토글) */
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.segmented > .q-btn { border-radius: 0 !important; }
+
+/* 결과/답변 공용 액션(복사·다운로드·재실행·원문이동) */
+.result-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.result-action-btn {
+  display: flex; align-items: center; gap: 4px;
+  background: transparent !important; border: 1px solid var(--border) !important;
+  color: var(--text-3); cursor: pointer; font-size: 11.5px; font-weight: 500;
+  padding: 4px 10px; border-radius: var(--radius); box-shadow: none !important;
+}
+.result-action-btn:hover { color: var(--text); border-color: var(--border-strong) !important; }
+.result-action-btn .material-symbols-outlined { font-size: 14px; margin-right: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 """
 
 
@@ -1590,3 +1678,104 @@ def inject_global_css():
         ui.add_head_html(
             f'<style id="ipm-global-styles-dark-v1-late">{_GLOBAL_CSS}</style>'
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# ux/screens 공통 컴포넌트 헬퍼 (A~D 전 패널 재사용)
+# ─────────────────────────────────────────────────────────────────────────
+def progress_block_html(text: str, *, start_ts: float | None = None,
+                         cancel_id: str | None = None) -> str:
+    """스피너 + 진행바 + 실시간 경과시간 카운터.
+
+    start_ts: time.time() epoch 초 — 같은 작업의 재렌더(.content 재할당) 사이에도
+    경과가 끊기지 않도록, 작업 시작 시 한 번 얻은 값을 매 호출에 그대로 전달할 것.
+    """
+    import time as _time
+    ts = start_ts if start_ts is not None else _time.time()
+    cancel_html = (
+        f'<button class="progress-cancel-btn" data-cancel-id="{_html.escape(cancel_id)}" '
+        'type="button" aria-label="작업 취소">'
+        '<span class="material-symbols-outlined">close</span>취소</button>'
+    ) if cancel_id else ''
+    return (
+        '<div class="progress-block">'
+        '<span class="material-symbols-outlined spin">progress_activity</span>'
+        '<div class="progress-block-body">'
+        f'<div class="progress-block-label"><span>{_html.escape(text)}</span>'
+        f'<span class="progress-block-elapsed" data-elapsed-since="{ts}">0초 경과</span></div>'
+        '<div class="progress-bar-track"><div class="progress-bar-fill"></div></div>'
+        '</div>'
+        f'{cancel_html}'
+        '</div>'
+    )
+
+
+def elapsed_ticker_script() -> str:
+    """[data-elapsed-since] 를 가진 모든 요소의 경과시간을 1초마다 갱신하는 스크립트.
+    페이지당 한 번만 add_body_html 로 주입하면 됨 (여러 번 주입해도 안전 — setInterval 중복은
+    무해하지만 굳이 여러 번 넣지 않도록 호출부에서 주의)."""
+    return '''
+<script>
+(function(){
+  function tick(){
+    document.querySelectorAll('[data-elapsed-since]').forEach(function(el){
+      const start = Number(el.getAttribute('data-elapsed-since'));
+      if (!start) return;
+      const sec = Math.max(0, Math.floor(Date.now() / 1000 - start));
+      el.textContent = sec + '초 경과';
+    });
+  }
+  setInterval(tick, 1000);
+  tick();
+})();
+</script>
+'''
+
+
+def step_list_html(steps: list[str], current_index: int, failed: bool = False) -> str:
+    """다단계 진행 스텝퍼. steps 이전 항목=완료, current_index=진행중, 이후=대기.
+
+    current_index 가 len(steps) 이상이면 전 단계 완료로 표시.
+    failed=True 면 current_index 단계를 오류 색상으로 표시하지 않고(토큰 제약상
+    새 색상 추가 금지) 텍스트로만 실패를 표기하도록 호출부에서 별도 처리할 것.
+    """
+    parts = []
+    for i, label in enumerate(steps):
+        if i < current_index:
+            cls, dot = 'done', '<span class="material-symbols-outlined" style="font-size:12px;">check</span>'
+        elif i == current_index:
+            cls, dot = 'active', str(i + 1)
+        else:
+            cls, dot = 'pending', str(i + 1)
+        parts.append(
+            f'<div class="step-item {cls}"><span class="step-dot">{dot}</span>'
+            f'<span class="step-label">{_html.escape(label)}</span></div>'
+        )
+        if i < len(steps) - 1:
+            conn_cls = 'done' if i < current_index else ''
+            parts.append(f'<div class="step-connector {conn_cls}"></div>')
+    return f'<div class="step-list">{"".join(parts)}</div>'
+
+
+def req_checklist_html(items: list[tuple[str, bool]]) -> str:
+    """실행 전 필수 항목 체크리스트. items: [(라벨, 충족여부), ...]"""
+    rows = []
+    for label, ok in items:
+        cls = 'ok' if ok else 'missing'
+        icon = 'check_circle' if ok else 'radio_button_unchecked'
+        rows.append(
+            f'<div class="req-item {cls}"><span class="material-symbols-outlined">{icon}</span>'
+            f'<span>{_html.escape(label)}</span></div>'
+        )
+    return f'<div class="req-checklist">{"".join(rows)}</div>'
+
+
+def result_actions_html(actions: list[tuple[str, str, str]]) -> str:
+    """결과/답변 공용 액션 바. actions: [(action-id, 아이콘, 라벨), ...]
+    각 버튼은 data-action="<action-id>" 로 렌더링되어 호출부에서 이벤트 위임으로 처리."""
+    btns = ''.join(
+        f'<button class="result-action-btn" data-action="{_html.escape(aid)}" type="button">'
+        f'<span class="material-symbols-outlined">{icon}</span>{_html.escape(label)}</button>'
+        for aid, icon, label in actions
+    )
+    return f'<div class="result-actions">{btns}</div>'
