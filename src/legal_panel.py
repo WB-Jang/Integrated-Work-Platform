@@ -335,6 +335,9 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 '{ s.scrollTop = s.scrollHeight; });'
             )
 
+        import time as _t
+        _search_start_ts = _t.time()
+
         def _stage_html(label: str) -> str:
             return (
                 '<div class="msg ai">'
@@ -342,7 +345,9 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 '<div class="msg-body" style="color:var(--text-3);display:flex;align-items:center;gap:8px;">'
                 '<span class="material-symbols-outlined" '
                 'style="font-size:16px;animation:spin 1.2s linear infinite;">progress_activity</span>'
-                f'{_html.escape(label)}</div>'
+                f'<span>{_html.escape(label)}</span>'
+                f'<span class="progress-block-elapsed" data-elapsed-since="{_search_start_ts}">0초 경과</span>'
+                '</div>'
                 '</div>'
             )
 

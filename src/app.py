@@ -189,6 +189,42 @@ llm_status.detect(_config)
 import prompt_date
 prompt_date.install()
 
+# ── Phase 2 (ux/improvements): 공통 진행 상태·모델 컨텍스트 라벨 헬퍼 ──────────
+# 분석/요약/법률검색/규제동향 등 모든 장시간 LLM 작업이 동일한 모양의
+# 스피너+진행바+경과시간 카운터를 쓰도록 공용 HTML 조각을 생성한다.
+def progress_block_html(text: str, *, start_ts: float | None = None,
+                         cancel_id: str | None = None) -> str:
+    """start_ts: time.time() epoch seconds — 동일 작업의 재렌더 사이에도 경과시간이
+    누적 표시되도록, 작업 시작 시 한 번 얻은 값을 매 호출에 그대로 전달해야 한다."""
+    import time as _time
+    ts = start_ts if start_ts is not None else _time.time()
+    cancel_html = (
+        f'<button class="progress-cancel-btn" data-cancel-id="{_html.escape(cancel_id)}" '
+        'type="button" aria-label="작업 취소">'
+        '<span class="material-symbols-outlined">close</span>취소</button>'
+    ) if cancel_id else ''
+    return (
+        '<div class="progress-block">'
+        '<span class="material-symbols-outlined spin">progress_activity</span>'
+        '<div class="progress-block-body">'
+        f'<div class="progress-block-label"><span>{_html.escape(text)}</span>'
+        f'<span class="progress-block-elapsed" data-elapsed-since="{ts}">0초 경과</span></div>'
+        '<div class="progress-bar-track"><div class="progress-bar-fill"></div></div>'
+        '</div>'
+        f'{cancel_html}'
+        '</div>'
+    )
+
+
+def exec_context_label_html(model_label: str) -> str:
+    """실행 버튼 옆에 붙이는 '이 작업은 {model}로 실행됩니다' 컨텍스트 라벨."""
+    return (
+        '<span class="exec-context-label">'
+        '<span class="material-symbols-outlined">memory</span>'
+        f'이 작업은 <b>{_html.escape(model_label)}</b>로 실행됩니다</span>'
+    )
+
+
 # ── 접속 IP → 사용자 이름 매핑 (이니셜 입력 대체, 로그 식별용) ──────────────────
 # config.json 의 ip_user_map 에 {"10.20.30.40": "홍길동"} 형태로 등록하면 해당 IP
 # 접속자는 이름으로 로그에 기록된다. 미등록 IP 는 IP 문자열 자체로 기록.
@@ -948,6 +984,7 @@ def main_page(request: Request):
         'session_dir': session_dir,
         'client_ip': client_ip,
         'persona_block': persona_block,
+        '_exec_context_labels': [],   # Phase 2: 모델 변경 시 함께 갱신할 컨텍스트 라벨들
     }
 
     log.info("페이지 진입 (user=%s, ip=%s, session_dir=%s)",
@@ -1018,6 +1055,8 @@ def main_page(request: Request):
                 set_current_user(state.get('user_initials', '-'))
                 state['selected_model_id'] = e.args if isinstance(e.args, str) else model_select.value
                 log.info("모델 변경: %s", state['selected_model_id'])
+                for _label_el in state['_exec_context_labels']:
+                    _label_el.content = exec_context_label_html(state['selected_model_id'])
 
             model_select.on('update:model-value', _on_model_change)
 
@@ -1329,6 +1368,27 @@ def main_page(request: Request):
 </script>
 ''')
 
+    # ── Phase 2: 진행 상태 컴포넌트의 경과시간(초) 실시간 갱신 ────────────
+    # data-elapsed-since 는 서버가 넘긴 time.time() epoch(초). status_label.content
+    # 재할당으로 DOM 노드가 매번 교체돼도 값은 작업 시작 시점 그대로이므로,
+    # 클라이언트 시계 기준으로 누적 경과가 끊김 없이 표시된다.
+    ui.add_body_html('''
+<script>
+(function(){
+  function tick(){
+    document.querySelectorAll('[data-elapsed-since]').forEach(function(el){
+      const start = Number(el.getAttribute('data-elapsed-since'));
+      if (!start) return;
+      const sec = Math.max(0, Math.floor(Date.now() / 1000 - start));
+      el.textContent = sec + '초 경과';
+    });
+  }
+  setInterval(tick, 1000);
+  tick();
+})();
+</script>
+''')
+
     # ── 채팅 입력창 공통: 일반 Enter 의 기본동작(줄바꿈 삽입) 차단 ──────────
     # 전송은 서버측 keydown.enter 핸들러가 수행한다. 기본동작을 막지 않으면
     # 전송 직후 textarea 에 줄바꿈이 삽입되고, 그 입력 이벤트가 서버의
@@ -1344,6 +1404,50 @@ def main_page(request: Request):
       e.preventDefault();
     }
   }, true);
+})();
+</script>
+''')
+
+    # ── Phase 2: 상시 상태 배너 (LLM 미연결 / 세션 데이터 휘발 안내) ────────
+    # 새로고침 없이도 항상 보이도록 nav 바로 아래, main-area 위에 고정 삽입한다.
+    if not _llm_ok:
+        ui.html(
+            '<div class="status-banner status-banner-danger" role="status">'
+            '<span class="material-symbols-outlined">cloud_off</span>'
+            'LLM 미연결 — 실행 기능이 제한됩니다</div>'
+        )
+
+    ui.html(
+        '<div id="session-volatility-banner" class="status-banner status-banner-info" '
+        'role="note">'
+        '<span class="material-symbols-outlined">info</span>'
+        '이 세션의 업로드/로그는 서버 재시작 시 삭제됩니다 — 중요 자료는 별도로 보관하세요.'
+        '<button class="status-banner-link" id="session-banner-loglink" type="button">로그 다운로드</button>'
+        '<button class="status-banner-dismiss" id="session-banner-dismiss" type="button" '
+        'aria-label="배너 닫기">'
+        '<span class="material-symbols-outlined">close</span></button>'
+        '</div>'
+    )
+    ui.add_body_html('''
+<script>
+(function(){
+  function bind(){
+    const dismiss = document.getElementById('session-banner-dismiss');
+    const banner = document.getElementById('session-volatility-banner');
+    const loglink = document.getElementById('session-banner-loglink');
+    if (dismiss && banner) {
+      dismiss.addEventListener('click', function(){ banner.style.display = 'none'; });
+    }
+    if (loglink) {
+      loglink.addEventListener('click', function(){
+        const trig = document.getElementById('_nav_trigger_admin');
+        if (trig) trig.click();
+      });
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bind);
+  } else { bind(); }
 })();
 </script>
 ''')
@@ -1477,6 +1581,11 @@ def main_page(request: Request):
                             with ui.element('div').classes('action-row'):
                                 btn_logic_single = ui.button('파일별 논리검증').classes('btn-primary-mono')
                                 btn_logic_all    = ui.button('전체 논리검증').classes('btn-primary-mono')
+
+                            exec_context_el = ui.html(
+                                exec_context_label_html(state.get('selected_model_id', _DEFAULT_MODEL))
+                            ).style('margin-top:8px;')
+                            state['_exec_context_labels'].append(exec_context_el)
 
                             status_label = ui.html('')
 
@@ -1750,15 +1859,6 @@ def main_page(request: Request):
             arefs['upload'].on_upload(handle_upload_analysis)
 
             # ── 단일 파일 분석 헬퍼 ──────────────────────────────────────
-            def _spinner_html(text: str) -> str:
-                return (
-                    '<div style="display:flex;align-items:center;gap:8px;'
-                    'color:var(--text-3);font-size:13px;padding:8px 0;">'
-                    '<span class="material-symbols-outlined" '
-                    'style="font-size:16px;animation:spin 1.2s linear infinite;">'
-                    f'progress_activity</span>{text}</div>'
-                )
-
             async def _run_on_file(analysis_type: str, file_info: dict):
                 """단일 파일 분석.
 
@@ -1775,6 +1875,12 @@ def main_page(request: Request):
                 }
                 chain_func, msg = chain_map[analysis_type]
                 file_label = _html.escape(file_info['name'])
+
+                import time as _t
+                _run_start_ts = _t.time()
+
+                def _spinner_html(text: str) -> str:
+                    return progress_block_html(text, start_ts=_run_start_ts)
 
                 def _is_active() -> bool:
                     return (
@@ -2403,6 +2509,10 @@ def _build_summary_panel(parent, state):
                     with ui.element('div').classes('action-row'):
                         btn_summary = ui.button('문서 요약').classes('btn-primary-mono')
                         btn_compress = ui.button('분량 축약').classes('btn-primary-mono')
+                    summary_exec_context_el = ui.html(
+                        exec_context_label_html(state.get('selected_model_id', _DEFAULT_MODEL))
+                    ).style('margin-top:8px;')
+                    state['_exec_context_labels'].append(summary_exec_context_el)
                     summary_status = ui.html('')
 
             # RIGHT — 원문 미리보기 + 요약 결과
@@ -2434,15 +2544,10 @@ def _build_summary_panel(parent, state):
                         log.info('문서 요약 시작: %s', state.get('summary_file_name'))
                         import time as _t
                         _start_t = _t.monotonic()
+                        _start_epoch = _t.time()
 
                         def _spin(msg: str) -> str:
-                            return (
-                                '<div style="display:flex;align-items:center;gap:8px;'
-                                'color:var(--text-3);font-size:13px;padding:8px 0;">'
-                                '<span class="material-symbols-outlined" '
-                                'style="font-size:16px;animation:spin 1.2s linear infinite;">'
-                                f'progress_activity</span>{msg}</div>'
-                            )
+                            return progress_block_html(msg, start_ts=_start_epoch)
 
                         summary_status.content = _spin(
                             'LLM 의미 단위 청킹 중… (1단계)'
@@ -2551,8 +2656,9 @@ def _build_summary_panel(parent, state):
                             ui.notify('파일을 먼저 업로드하세요.', type='warning', position='top')
                             return
                         log.info('분량 축약 시작: %s', state.get('summary_file_name'))
-                        summary_status.content = (
-                            '<div style="color:var(--text-3);font-size:13px;padding:8px 0;">분량 축약 중…</div>'
+                        import time as _t
+                        summary_status.content = progress_block_html(
+                            '분량 축약 중…', start_ts=_t.time()
                         )
                         try:
                             llm = create_llm(model_id=state.get('selected_model_id'))
@@ -3281,9 +3387,9 @@ def _build_convert_panel(parent, state):
                 try:
                     target_path = os.path.join(target_dir, file_name)
                     await e.file.save(target_path)
-                    ui.notify(f'업로드: {file_name}', type='positive')
+                    ui.notify(f'업로드: {file_name}', type='positive', position='top')
                 except Exception as ex:
-                    ui.notify(f'저장 실패: {ex}', type='negative')
+                    ui.notify(f'저장 실패: {ex}', type='negative', position='top')
 
             def _create_zip_only(dst, zip_path):
                 shutil.make_archive(zip_path.replace('.zip', ''), 'zip', dst)
@@ -3305,7 +3411,7 @@ def _build_convert_panel(parent, state):
                     if not f.startswith('~$')
                 ] if os.path.isdir(target_dir) else []
                 if not uploaded:
-                    ui.notify('업로드된 파일이 없습니다.', type='warning')
+                    ui.notify('업로드된 파일이 없습니다.', type='warning', position='top')
                     return
 
                 # ── 로그 다이얼로그 생성 ────────────────────────────────

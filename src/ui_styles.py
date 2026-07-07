@@ -278,6 +278,76 @@ html body #main-nav * {
   font-size: 11px; color: var(--text-4); display: flex; gap: 12px;
 }
 
+/* ── Phase 2: 상태 배너 (LLM 미연결 / 세션 데이터 휘발 안내) ──────────── */
+.status-banner {
+  width: 100%; flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+  padding: 7px 28px; font-size: 12.5px; font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+.status-banner .material-symbols-outlined { font-size: 16px; flex-shrink: 0; }
+.status-banner-danger {
+  background: rgba(239,68,68,.1); color: #fca5a5; border-bottom-color: rgba(239,68,68,.2);
+}
+.status-banner-info {
+  background: rgba(14,165,233,.08); color: var(--text-2); border-bottom-color: rgba(14,165,233,.15);
+}
+.status-banner-link {
+  background: transparent !important; border: none; cursor: pointer;
+  color: var(--accent); font-weight: 600; font-size: 12.5px; padding: 0;
+  text-decoration: underline; box-shadow: none !important;
+}
+.status-banner-dismiss {
+  margin-left: auto; background: transparent !important; border: none; cursor: pointer;
+  color: var(--text-4); box-shadow: none !important; padding: 2px; display: flex;
+  flex-shrink: 0;
+}
+.status-banner-dismiss:hover { color: var(--text-2); }
+.status-banner-dismiss .material-symbols-outlined { font-size: 16px; }
+
+/* ── Phase 2: 공통 진행 상태(progress) 컴포넌트 ──────────────────────── */
+.progress-block {
+  display: flex; align-items: center; gap: 10px; padding: 10px 0;
+  color: var(--text-3); font-size: 13px;
+}
+.progress-block .material-symbols-outlined.spin {
+  font-size: 16px; animation: spin 1.2s linear infinite; flex-shrink: 0;
+}
+.progress-block-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.progress-block-label {
+  display: flex; align-items: baseline; gap: 8px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.progress-block-elapsed { color: var(--text-4); font-size: 11.5px; flex-shrink: 0; }
+.progress-bar-track {
+  width: 100%; height: 4px; border-radius: 2px; background: var(--border);
+  overflow: hidden; position: relative;
+}
+.progress-bar-fill {
+  position: absolute; top: 0; left: 0; height: 100%; border-radius: 2px;
+  background: var(--accent); animation: indeterminate 1.4s ease-in-out infinite;
+}
+.progress-cancel-btn {
+  flex-shrink: 0; display: flex; align-items: center; gap: 4px;
+  background: transparent !important; border: 1px solid var(--border) !important;
+  color: var(--text-3); cursor: pointer; font-size: 11.5px; font-weight: 500;
+  padding: 4px 9px; border-radius: var(--radius); box-shadow: none !important;
+}
+.progress-cancel-btn:hover { color: var(--danger); border-color: rgba(239,68,68,.4) !important; }
+.progress-cancel-btn .material-symbols-outlined { font-size: 14px; margin-right: 0; }
+
+/* ── Phase 2: 실행 버튼 옆 모델 컨텍스트 라벨 ────────────────────────── */
+.exec-context-label {
+  font-size: 11px; color: var(--text-4); display: flex; align-items: center; gap: 4px;
+}
+.exec-context-label .material-symbols-outlined { font-size: 13px; }
+.exec-context-label b { color: var(--text-3); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-block .material-symbols-outlined.spin,
+  .nav-caret,
+  .progress-bar-fill { transition: none !important; animation: none !important; }
+}
+
 /* 서브탭 — 문서분석/요약/Q&A 등의 "실행/결과" 전환 바 */
 .sub-tab-bar {
   display: flex; gap: 4px;
@@ -313,6 +383,12 @@ html body #main-nav * {
 }
 .model-badge span { font-size: 10px; color: var(--success); font-weight: 500; }
 @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.35;} }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes indeterminate {
+  0%   { transform: translateX(-60%); width: 40%; }
+  50%  { transform: translateX(40%);  width: 55%; }
+  100% { transform: translateX(160%); width: 40%; }
+}
 
 /* 모델 선택 드롭다운 (구 sidebar-footer 위치 → 상단 우측으로 이동) */
 .model-select-q.q-field { font-family: var(--font-sans) !important; }
@@ -810,7 +886,11 @@ select.inp option { background: var(--bg-elev); color: var(--text); }
    Main area & panels
    ───────────────────────────────────────────────────────── */
 .main-area {
-  height: calc(100vh - var(--topnav-h));
+  /* flex:1 로 nicegui-content(세로 flex 컨테이너) 내 나머지 공간을 채운다.
+     상태 배너(.status-banner)가 header 아래에 추가로 들어와도 자동으로
+     남는 높이만 차지하므로 별도 calc() 보정이 필요 없다. */
+  flex: 1;
+  min-height: 0;
   width: 100%;
   display: flex; flex-direction: column;
   overflow: hidden;

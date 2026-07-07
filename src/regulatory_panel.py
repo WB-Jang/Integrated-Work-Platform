@@ -271,10 +271,14 @@ def build_regulatory_panel(config: dict, create_llm_fn):
         naver_client_id   = config.get('naver_client_id', '').strip()
         naver_client_secret = config.get('naver_client_secret', '').strip()
 
+        import time as _t
+        _start_ts = _t.time()
         fetch_progress.visible = True
         fetch_btn_agency.props(add='disable')
         fetch_status_agency.content = (
-            '<div class="muted-text" style="margin-top:8px;">수집 및 분석 중…</div>'
+            '<div class="muted-text" style="margin-top:8px;display:flex;align-items:center;gap:8px;">'
+            '수집 및 분석 중… '
+            f'<span class="progress-block-elapsed" data-elapsed-since="{_start_ts}">0초 경과</span></div>'
         )
         result_container.clear()
         result_count_label.content = (
@@ -324,11 +328,20 @@ def build_regulatory_panel(config: dict, create_llm_fn):
         naver_client_id     = config.get('naver_client_id', '').strip()
         naver_client_secret = config.get('naver_client_secret', '').strip()
 
+        import time as _t
+        _yna_start_ts = _t.time()
+
+        def _yna_status(msg: str) -> str:
+            return (
+                f'<div class="muted-text" style="margin-top:8px;display:flex;'
+                f'align-items:center;gap:8px;">{msg} '
+                f'<span class="progress-block-elapsed" data-elapsed-since="{_yna_start_ts}">'
+                '0초 경과</span></div>'
+            )
+
         fetch_progress.visible = True
         fetch_btn_yna.props(add='disable')
-        fetch_status_yna.content = (
-            '<div class="muted-text" style="margin-top:8px;">키워드 추출 중…</div>'
-        )
+        fetch_status_yna.content = _yna_status('키워드 추출 중…')
         result_container.clear()
         result_count_label.content = (
             '<div class="muted-text">키워드 추출 중…</div>'
@@ -353,9 +366,8 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             search_queries = await nicegui_run.io_bound(
                 extract_search_queries, question, llm, 5,
             )
-            fetch_status_yna.content = (
-                f'<div class="muted-text" style="margin-top:8px;">검색 중… '
-                f'(표현: {", ".join(search_queries)})</div>'
+            fetch_status_yna.content = _yna_status(
+                f'검색 중… (표현: {", ".join(search_queries)})'
             )
 
             # 2) 검색 표현으로 뉴스 후보 수집 (네이버→BIGKinds→연합뉴스 RSS 순)
@@ -367,9 +379,8 @@ def build_regulatory_panel(config: dict, create_llm_fn):
 
             # 3) BGE-M3 질문-기사 유사도 재정렬(항상 수행 → 관련성 점수 확보) + 임계값 판정
             if items:
-                fetch_status_yna.content = (
-                    f'<div class="muted-text" style="margin-top:8px;">'
-                    f'{len(items)}건 후보 중 의미 유사도 재정렬…</div>'
+                fetch_status_yna.content = _yna_status(
+                    f'{len(items)}건 후보 중 의미 유사도 재정렬…'
                 )
                 items = await nicegui_run.io_bound(
                     rerank_by_question,
@@ -407,9 +418,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
                 )
 
             # 4) 각 기사 LLM 요약
-            fetch_status_yna.content = (
-                f'<div class="muted-text" style="margin-top:8px;">{len(items)}건 요약 중…</div>'
-            )
+            fetch_status_yna.content = _yna_status(f'{len(items)}건 요약 중…')
 
             def _summarize_all(items_, llm_):
                 out = []
@@ -435,9 +444,7 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             # 6) 클러스터별 대표 기사로 질문 통합 답변 생성
             answer_summary = ''
             if results:
-                fetch_status_yna.content = (
-                    '<div class="muted-text" style="margin-top:8px;">통합 답변 생성 중…</div>'
-                )
+                fetch_status_yna.content = _yna_status('통합 답변 생성 중…')
                 answer_summary = await nicegui_run.io_bound(
                     summarize_clusters_for_question, question, results, llm, approximate,
                 )
