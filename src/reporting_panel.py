@@ -13,6 +13,9 @@ from nicegui import ui, events, run as nicegui_run
 
 from reporting_runner import REPORT_CONFIGS, run_report, get_upload_dir, analyze_fx5260_var_accounts
 import activity_log
+from ui_styles import req_checklist_html, step_list_html
+
+_FX5260_STEPS = ['변동금리 분석', '금리 입력', '금리 적용', '실행']
 
 
 def build_reporting_panel(config: dict):
@@ -60,14 +63,31 @@ def build_reporting_panel(config: dict):
                 '<span class="material-symbols-outlined">terminal</span>실행 로그'
                 '</div>'
             )
+            status_badge_el = ui.html(
+                '<span class="badge-idle">준비</span>'
+            )
+
+            def _set_status_badge(kind: str, label: str) -> None:
+                status_badge_el.content = f'<span class="badge-{kind}">{_html.escape(label)}</span>'
+            progress_bar = ui.linear_progress(value=0).props('indeterminate').classes('w-full mt-2')
+            progress_bar.visible = False
+            log_toggle_btn = ui.button('자세히 보기 (원시 로그)').props('flat dense no-caps').classes('mt-2').style(
+                'align-self:flex-start;font-size:11.5px;color:var(--text-3);padding:2px 4px;'
+            )
             log_el = ui.html(
                 '<div class="log-area">'
                 '<span style="color:#737373;">보고서를 선택하고 실행하세요.</span>'
                 '</div>'
             )
-            progress_bar = ui.linear_progress(value=0).props('indeterminate').classes('w-full mt-2')
-            progress_bar.visible = False
+            log_el.visible = False
             download_area = ui.column().classes('w-full mt-3')
+
+            def _toggle_log():
+                log_el.visible = not log_el.visible
+                log_toggle_btn.text = (
+                    '숨기기 (원시 로그)' if log_el.visible else '자세히 보기 (원시 로그)'
+                )
+            log_toggle_btn.on_click(_toggle_log)
 
         # ── 우측: 입력/채팅 ──────────────────────────────────────────────
         with ui.element('div').style('display:flex; flex-direction:column;'):
@@ -87,11 +107,13 @@ def build_reporting_panel(config: dict):
             param_area = ui.column().classes('w-full mt-2')
             fx5260_area = ui.column().classes('w-full mt-2')   # FX5260 변동금리 분석 전용 영역
 
+            checklist_area = ui.html('')
+
             run_btn = ui.button('실행').classes('btn-primary-mono w-full mt-3')
             run_btn.visible = False
 
             ui.html(
-                '<div class="muted-label" style="margin-top:16px;">메모 / 추가 입력</div>'
+                '<div class="muted-label" style="margin-top:16px;">메모 (저장되지 않음 — 세션 내 참고용)</div>'
             )
             chat_container = ui.column().classes('w-full').style(
                 'background:var(--bg-elev);border:1px solid var(--border);'
@@ -99,7 +121,7 @@ def build_reporting_panel(config: dict):
                 'padding:8px;display:flex;flex-direction:column;gap:6px;'
             )
             with ui.row().classes('w-full gap-2 mt-2 no-wrap'):
-                chat_input = ui.input(placeholder='메시지 입력...').props('outlined dense').classes('flex-1')
+                chat_input = ui.input(placeholder='메모 입력 (저장되지 않음)...').props('outlined dense').classes('flex-1')
                 send_btn = ui.button('전송').classes('btn-primary-mono')
 
     # ─── 이벤트 / 헬퍼 ───────────────────────────────────────────────────
@@ -186,6 +208,7 @@ def build_reporting_panel(config: dict):
                         f'</div>'
                     )
                     ui.notify(f'{orig_name} 업로드 완료', type='positive', position='top')
+                    _refresh_checklist()
 
                 w = ui.upload(
                     on_upload=handle_upload,
@@ -207,7 +230,31 @@ def build_reporting_panel(config: dict):
                 optional = p_def.get('optional', False)
                 lbl = label + (' (선택)' if optional else '')
                 inp = ui.input(label=lbl, placeholder=hint or label).props('outlined dense').classes('w-full mt-1')
+                inp.on('blur', lambda: _refresh_checklist())
                 param_inputs[pkey] = inp
+
+    def _refresh_checklist():
+        """B-2: 필수 파일/파라미터 충족 여부를 상시 체크리스트로 표시하고,
+        전부 충족 전까지 실행 버튼을 비활성화한다."""
+        report_key = state.get('selected')
+        if not report_key:
+            checklist_area.content = ''
+            return
+        cfg = REPORT_CONFIGS[report_key]
+        items = []
+        for f_def in cfg['files']:
+            items.append((f_def['label'], f_def['key'] in state['uploaded_files']))
+        for p_def in cfg['params']:
+            if p_def.get('optional'):
+                continue
+            inp = param_inputs.get(p_def['key'])
+            filled = bool((inp.value or '').strip()) if inp else False
+            items.append((p_def['label'], filled))
+        checklist_area.content = req_checklist_html(items)
+        if all(ok for _, ok in items):
+            run_btn.props(remove='disable')
+        else:
+            run_btn.props(add='disable')
 
     # ── FX5260 변동금리 인터랙션 ──────────────────────────────────────────
     # 원 스크립트는 변동금리 계좌를 print → 사용자가 사내 시스템에서 금리를 조회·입력하는
@@ -222,6 +269,7 @@ def build_reporting_panel(config: dict):
             return
         with fx5260_area:
             ui.html('<div class="muted-label" style="margin-top:8px;">변동금리 계좌 처리</div>')
+            fx_step_el = ui.html(step_list_html(_FX5260_STEPS, 0))
             ui.html(
                 '<div class="muted-text" style="font-size:11.5px;color:var(--text-3);'
                 'margin-bottom:6px;line-height:1.5;">'
@@ -254,6 +302,7 @@ def build_reporting_panel(config: dict):
                 fx_state['rate_inputs'] = {}
 
                 if not accounts:
+                    fx_step_el.content = step_list_html(_FX5260_STEPS, 3)
                     with fx_list_area:
                         ui.html('<div class="muted-text">변동금리 입력이 필요한 계좌가 없습니다. '
                                 '바로 [실행]하세요.</div>')
@@ -262,6 +311,7 @@ def build_reporting_panel(config: dict):
                         var_inp.value = '{}'
                     return
 
+                fx_step_el.content = step_list_html(_FX5260_STEPS, 1)
                 with fx_list_area:
                     ui.html(
                         f'<div class="muted-text" style="margin:6px 0;">'
@@ -291,6 +341,7 @@ def build_reporting_panel(config: dict):
                         var_inp = param_inputs.get('var_rates_json')
                         if var_inp:
                             var_inp.value = json.dumps(rates, ensure_ascii=False)
+                        fx_step_el.content = step_list_html(_FX5260_STEPS, 3)
                         add_chat_message('sys', f'변동금리 {len(rates)}건 적용 완료. 이제 [실행]을 누르세요.')
                         ui.notify('변동금리가 적용되었습니다. [실행]으로 보고서를 생성하세요.',
                                   type='positive', position='top')
@@ -328,7 +379,9 @@ def build_reporting_panel(config: dict):
         refresh_fx5260_area(key)
         run_btn.visible = True
         download_area.clear()
+        _set_status_badge('idle', '준비')
         update_log(f"[{cfg['name']}] 파일을 업로드하고 파라미터를 입력한 후 실행하세요.")
+        _refresh_checklist()
 
         if key == 'fx5260':
             add_chat_message(
@@ -379,6 +432,7 @@ def build_reporting_panel(config: dict):
         progress_bar.visible = True
         run_btn.props(add='disable')
         download_area.clear()
+        _set_status_badge('reviewing', '실행 중')
         update_log(f"[{cfg['name']}] 실행 중...\n")
         add_chat_message('sys', f"{cfg['name']} 실행 시작")
 
@@ -405,6 +459,7 @@ def build_reporting_panel(config: dict):
                     pass
 
         if ok:
+            _set_status_badge('done', '완료')
             add_chat_message('sys', f"{cfg['name']} 완료! 아래 다운로드 버튼을 이용하세요.")
             with download_area:
                 ui.html('<div class="muted-label">다운로드</div>')
@@ -419,6 +474,7 @@ def build_reporting_panel(config: dict):
             ui.notify(f"{cfg['name']} 완료", type='positive', position='top')
             activity_log.record('report', cfg['name'], status='done')
         else:
+            _set_status_badge('error', '오류')
             add_chat_message('sys', '실행 중 오류가 발생했습니다. 로그를 확인하세요.')
             ui.notify('실행 오류 발생', type='negative', position='top')
             activity_log.record('report', cfg['name'], status='error')
