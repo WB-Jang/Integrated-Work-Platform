@@ -194,7 +194,15 @@ html body #main-nav * {
 }
 
 /* ── 탭 그룹 드롭다운 (LLM 도구/업무 자동화/대시보드) ───────────────── */
-.nav-group { position: relative; height: 100%; display: flex; flex-shrink: 0; }
+/* display:flex(블록 레벨)로 두면 형제인 .top-tab(<button>, 기본 inline-block)과
+   달리 항상 새 줄로 내려가 세로로 쌓여버린다(부모 #main-nav 의 실제 직계
+   자식은 NiceGUI가 삽입하는 래퍼 div 하나뿐이라 flex가 적용되지 않고,
+   버튼/그룹 div들은 그 래퍼 내부에서 일반 흐름으로 배치되기 때문 —
+   그 결과 LLM 도구/업무 자동화/대시보드 그룹이 header 밖으로 밀려나
+   overflow-y:hidden 에 가려 전혀 안 보이던 버그).
+   inline-flex로 바꿔 그룹 자신은 flex 컨테이너를 유지하면서도 형제 버튼들과
+   같은 줄에 나란히 흐르도록 한다. */
+.nav-group { position: relative; height: 100%; display: inline-flex; flex-shrink: 0; vertical-align: top; }
 .nav-group-btn { display: flex; align-items: center; }
 .nav-caret { font-size: 14px !important; margin-left: 2px !important; margin-right: 0 !important; transition: transform .15s; }
 .nav-group.open .nav-caret { transform: rotate(180deg); }

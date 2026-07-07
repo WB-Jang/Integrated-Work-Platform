@@ -588,10 +588,11 @@ _NAV_AGENT = ('agent', 'AI 에이전트', 'smart_toy')
 
 # 그룹 드롭다운 메타 (gkey, glabel, gicon, items) — ux/improvements: 13개 flat
 # 탭을 논리 그룹으로 재편해 1280px 폭에서도 2클릭 이내 도달 가능하게 함.
+# 대시보드(_NAV_DASH)는 홈/AI에이전트처럼 단독 탭으로 유지 — 드롭다운 그룹은
+# LLM 기능 / 업무 자동화 총 2개만 둔다 (사용자 피드백 반영).
 _NAV_GROUPS_META = [
-    ('llm',       'LLM 도구',    'smart_toy', _NAV_LLM),
+    ('llm',       'LLM 기능',    'smart_toy', _NAV_LLM),
     ('business',  '업무 자동화', 'work',      _NAV_BIZ),
-    ('dashboard', '대시보드',    'dashboard', _NAV_DASH),
 ]
 
 # LLM 백엔드가 필요한 탭 — 미연결 시 진입하면 안내 팝업을 띄운다.
@@ -642,6 +643,8 @@ def _build_top_nav_html() -> str:
     """
     parts = [_top_tab_html(_NAV_HOME[0], _NAV_HOME[1], _NAV_HOME[2], active=True)]
     parts.append(_top_tab_html(_NAV_AGENT[0], _NAV_AGENT[1], _NAV_AGENT[2]))
+    for key, label, icon in _NAV_DASH:
+        parts.append(_top_tab_html(key, label, icon))
     for gkey, glabel, gicon, items in _NAV_GROUPS_META:
         parts.append(_nav_group_html(gkey, glabel, gicon, items))
     parts.append(_top_tab_html(_NAV_ADMIN[0], _NAV_ADMIN[1], _NAV_ADMIN[2]))
@@ -661,6 +664,8 @@ def _nav_search_index() -> list:
         {'key': _NAV_HOME[0], 'label': _NAV_HOME[1], 'group': '', 'icon': _NAV_HOME[2]},
         {'key': _NAV_AGENT[0], 'label': _NAV_AGENT[1], 'group': '', 'icon': _NAV_AGENT[2]},
     ]
+    for key, label, icon in _NAV_DASH:
+        items.append({'key': key, 'label': label, 'group': '', 'icon': icon})
     for gkey, glabel, _gicon, group_items in _NAV_GROUPS_META:
         for key, label, icon in group_items:
             items.append({'key': key, 'label': label, 'group': glabel, 'icon': icon})
