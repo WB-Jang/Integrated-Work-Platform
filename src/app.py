@@ -1043,6 +1043,52 @@ def main_page(request: Request):
                 'border-radius:4px;padding:1px 5px;">⌘K</span>'
                 '</button>'
             )
+
+            # ── Phase 3: 밀도 토글 (compact/normal), storage.user 에 영속 ──────
+            try:
+                _density_val = nicegui_app.storage.user.get('density', 'normal')
+            except Exception:
+                _density_val = 'normal'
+            density_state = {'value': _density_val}
+            _density_icon = 'density_small' if _density_val == 'normal' else 'density_medium'
+            density_btn_html = ui.html(
+                f'<button class="density-toggle-btn" id="density-toggle" type="button" '
+                f'aria-label="화면 밀도 전환 (컴팩트/일반)" title="화면 밀도 전환">'
+                f'<span class="material-symbols-outlined" id="density-toggle-icon">{_density_icon}</span>'
+                f'</button>'
+            )
+
+            def _toggle_density():
+                density_state['value'] = (
+                    'compact' if density_state['value'] == 'normal' else 'normal'
+                )
+                try:
+                    nicegui_app.storage.user['density'] = density_state['value']
+                except Exception:
+                    pass
+                _icon = 'density_small' if density_state['value'] == 'normal' else 'density_medium'
+                ui.run_javascript(
+                    f'document.body.setAttribute("data-density", "{density_state["value"]}");'
+                    f'const ic = document.getElementById("density-toggle-icon"); '
+                    f'if (ic) ic.textContent = "{_icon}";'
+                )
+
+            density_toggle_trigger = ui.button().props('id=density-toggle-real-btn').style('display:none;')
+            density_toggle_trigger.on('click', lambda: _toggle_density())
+            ui.run_javascript(
+                f'document.body.setAttribute("data-density", "{_density_val}");'
+            )
+            ui.add_body_html('''
+<script>
+(function(){
+  document.addEventListener('click', function(e){
+    if (!e.target.closest('#density-toggle')) return;
+    document.getElementById('density-toggle-real-btn')?.click();
+  });
+})();
+</script>
+''')
+
             model_select = ui.select(
                 options=list(MODEL_OPTIONS.keys()),
                 value=_DEFAULT_MODEL,
@@ -1496,6 +1542,7 @@ def main_page(request: Request):
             analysis_files: list[dict] = []
             analysis_sel: list[int] = [-1]    # 선택된 파일 인덱스 (mutable)
             analysis_active_tab: list[str] = ['proofreading']  # 현재 우측 탭 (mutable)
+            last_analysis_run: dict = {'type': None}   # Phase 3: 직전 분석 재실행용
             arefs: dict = {}
 
             # 분석 유형 메타 (key, label, badge fg/bg color)
@@ -1529,7 +1576,7 @@ def main_page(request: Request):
                     ui.html('분석 결과')
 
             with ui.element('div').classes('split').style(
-                'grid-template-columns:360px 1fr;'
+                'grid-template-columns:clamp(280px,26vw,360px) 1fr;'
             ) as split_el:
 
                 # ── LEFT pane — 업로드 + 파일 목록 + 분석 실행 설정 ────────
@@ -1581,6 +1628,12 @@ def main_page(request: Request):
                             with ui.element('div').classes('action-row'):
                                 btn_logic_single = ui.button('파일별 논리검증').classes('btn-primary-mono')
                                 btn_logic_all    = ui.button('전체 논리검증').classes('btn-primary-mono')
+
+                            ui.html('<div class="divider" style="margin:12px 0;"></div>')
+                            btn_rerun_last = ui.button(
+                                '직전 분석 재실행', icon='replay'
+                            ).classes('btn-primary-mono').style('width:100%;')
+                            btn_rerun_last.visible = False
 
                             exec_context_el = ui.html(
                                 exec_context_label_html(state.get('selected_model_id', _DEFAULT_MODEL))
@@ -1758,7 +1811,7 @@ def main_page(request: Request):
                                 'background:transparent;border:none;cursor:pointer;'
                                 'color:var(--text-4);padding:2px 4px;flex-shrink:0;'
                                 'display:flex;align-items:center;'
-                            ).props('title="목록에서 제거"')
+                            ).props('title="목록에서 제거" aria-label="목록에서 제거"')
                             with del_btn:
                                 ui.html('<span class="material-symbols-outlined" '
                                         'style="font-size:16px;">close</span>')
@@ -2102,6 +2155,11 @@ def main_page(request: Request):
                         return
                     target_fi = analysis_files[analysis_sel[0]]
 
+                # Phase 3: 직전 분석 재실행 버튼 활성화 (다음부터 같은 유형을 원클릭 재실행)
+                last_analysis_run['type'] = analysis_type
+                btn_rerun_last.visible = True
+                btn_rerun_last.text = f'직전 분석 재실행 ({ANALYSIS_LABEL[analysis_type]})'
+
                 # 분석 직전: 해당 파일의 해당 유형 결과만 초기화 (다른 분석 결과는 보존)
                 target_fi.setdefault('analyses', {}).pop(analysis_type, None)
                 # 선택된 파일을 명시적으로 미리보기 대상으로 전환 + 해당 분석 탭으로 전환
@@ -2247,7 +2305,13 @@ def main_page(request: Request):
             btn_style.on_click(lambda: run_analysis('style'))
             btn_logic_single.on_click(lambda: run_analysis('logic'))
             btn_logic_all.on_click(run_logic_all)
-            for _b in (btn_proof, btn_style, btn_logic_single, btn_logic_all):
+
+            def _rerun_last_analysis():
+                if last_analysis_run['type']:
+                    return run_analysis(last_analysis_run['type'])
+
+            btn_rerun_last.on_click(_rerun_last_analysis)
+            for _b in (btn_proof, btn_style, btn_logic_single, btn_logic_all, btn_rerun_last):
                 _gate_llm_button(_b)
 
             # 초기 탭(오타 검수) 활성화 시각 상태 설정
@@ -2417,7 +2481,7 @@ def _build_summary_panel(parent, state):
                 '<div class="page-subtitle">계층적 Map-Reduce 방식으로 요약하거나 분량을 축약합니다.</div>'
                 '</div>'
             )
-        with ui.element('div').classes('split').style('grid-template-columns:340px 1fr;'):
+        with ui.element('div').classes('split').style('grid-template-columns:clamp(260px,24vw,340px) 1fr;'):
             # LEFT — 업로드 + 요약 실행 설정
             with ui.element('div').classes('pane'):
                 with ui.element('div').classes('pane-head'):
@@ -2934,12 +2998,12 @@ def _build_qa_panel(parent, state, create_llm_fn):
 
                             with ui.element('div').classes('composer-actions'):
                                 qrefs['clear'] = ui.element('button').classes('icon-btn')
-                                qrefs['clear'].props('title="대화 초기화"')
+                                qrefs['clear'].props('title="대화 초기화" aria-label="대화 초기화"')
                                 with qrefs['clear']:
                                     ui.html('<span class="material-symbols-outlined">restart_alt</span>')
 
                                 qrefs['send'] = ui.element('button').classes('send-btn')
-                                qrefs['send'].props('title="전송 (Enter)"')
+                                qrefs['send'].props('title="전송 (Enter)" aria-label="메시지 전송"')
                                 with qrefs['send']:
                                     ui.html('<span class="material-symbols-outlined">arrow_upward</span>')
 
@@ -3036,7 +3100,7 @@ def _build_qa_panel(parent, state, create_llm_fn):
                             'background:transparent;border:none;cursor:pointer;'
                             'color:var(--text-4);padding:2px 4px;flex-shrink:0;'
                             'display:flex;align-items:center;'
-                        ).props('title="목록에서 제거"')
+                        ).props('title="목록에서 제거" aria-label="목록에서 제거"')
                         with del_btn:
                             ui.html('<span class="material-symbols-outlined" '
                                     'style="font-size:16px;">close</span>')

@@ -185,7 +185,7 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 ).props('borderless autogrow rows=1 dense').classes('flex-1')
                 with ui.element('div').classes('composer-actions'):
                     send_btn = ui.element('button').classes('send-btn')
-                    send_btn.props('title="검색 (Enter)"')
+                    send_btn.props('title="검색 (Enter)" aria-label="검색 실행"')
                     with send_btn:
                         ui.html('<span class="material-symbols-outlined">arrow_upward</span>')
             ui.html(

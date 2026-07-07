@@ -343,9 +343,12 @@ html body #main-nav * {
 .exec-context-label b { color: var(--text-3); font-weight: 600; }
 
 @media (prefers-reduced-motion: reduce) {
-  .progress-block .material-symbols-outlined.spin,
-  .nav-caret,
-  .progress-bar-fill { transition: none !important; animation: none !important; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* 서브탭 — 문서분석/요약/Q&A 등의 "실행/결과" 전환 바 */
@@ -854,8 +857,8 @@ select.inp option { background: var(--bg-elev); color: var(--text); }
   min-height: 0;
 }
 .filter-col {
-  width: 280px;
-  min-width: 280px;
+  width: clamp(220px, 24vw, 300px);
+  min-width: 220px;
   flex-shrink: 0;
   overflow-y: auto;
 }
@@ -870,7 +873,7 @@ select.inp option { background: var(--bg-elev); color: var(--text); }
 /* Three-column variant (sidebar list / log / control) */
 .tri-col-row {
   display: grid;
-  grid-template-columns: 230px 1fr 1fr;
+  grid-template-columns: minmax(190px, 230px) minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
   flex: 1;
   padding: 20px 24px;
@@ -914,6 +917,27 @@ select.inp option { background: var(--bg-elev); color: var(--text); }
 .page-subtitle {
   font-size: 13px; color: var(--text-3); margin-top: 4px;
 }
+
+/* ── Phase 3: 밀도 토글 (compact/normal) — body[data-density] ──────────── */
+body[data-density="compact"] .page-head { padding: 14px 24px 10px; }
+body[data-density="compact"] .page-title { font-size: 17px; }
+body[data-density="compact"] .page-subtitle { font-size: 12px; margin-top: 2px; }
+body[data-density="compact"] .pane-head { padding: 10px 16px; }
+body[data-density="compact"] .pane-body { padding: 12px 16px; }
+body[data-density="compact"] .chat-scroll { padding: 16px 0; }
+body[data-density="compact"] .action-row { gap: 6px; }
+body[data-density="compact"] .filter-col,
+body[data-density="compact"] .result-col,
+body[data-density="compact"] .tri-col-row { padding: 12px 16px; gap: 10px; }
+
+.density-toggle-btn {
+  display: flex; align-items: center; gap: 4px;
+  background: transparent !important; border: 1px solid var(--border) !important;
+  color: var(--text-3); cursor: pointer; font-size: 11px; font-weight: 500;
+  padding: 4px 8px; border-radius: var(--radius); box-shadow: none !important;
+}
+.density-toggle-btn:hover { color: var(--text); border-color: var(--border-strong) !important; }
+.density-toggle-btn .material-symbols-outlined { font-size: 15px; margin-right: 0; }
 
 /* ─────────────────────────────────────────────────────────
    Chat (Home / Legal)
