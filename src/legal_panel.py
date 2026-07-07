@@ -89,16 +89,19 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
     # 페르소나는 접속 IP 가 확인된 유저의 것만 주입 (빈 문자열 = 미적용)
     agent.persona_block = persona_block or ""
 
-    def _sync_model():
-        """검색 직전 사이드바 선택 모델을 에이전트에 적용 (하드코딩 방지)."""
+    def _sync_model() -> str:
+        """검색 직전 사이드바 선택 모델을 에이전트에 적용 (하드코딩 방지).
+        반환값은 메타칩에 표시할 모델명(실패/미설정 시 빈 문자열)."""
         if not model_getter:
-            return
+            return ''
         try:
             prov, mdl = model_getter()
             if mdl:
                 agent.set_model(prov, mdl)
+                return mdl
         except Exception as e:
             log.warning("법률검색 모델 동기화 실패: %s", e)
+        return ''
 
     # ── 페이지 헤더 ──────────────────────────────────────────────────────
     with ui.element('div').classes('page-head'):
@@ -109,7 +112,7 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
             '</div>'
         )
         clear_btn = ui.button('대화 초기화').classes('btn-primary-mono')
-        clear_btn.props('icon-right=refresh').style('display:none;')
+        clear_btn.props('icon-right=refresh id=legal-clear-btn').style('display:none;')
 
     # ── 검색 모드 / 메모리 상태 바 ───────────────────────────────────────
     laws = agent.get_loaded_laws()
@@ -148,13 +151,24 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
         chars = agent._total_history_chars()
         max_chars = agent.mem_cfg.get("max_chars", 5000)
         pct = min(100, int(chars / max_chars * 100)) if max_chars else 0
+        warn = pct >= 80
+        fill_style = (
+            f'width:{pct}%;background:var(--danger);' if warn
+            else f'width:{pct}%;'
+        )
+        warn_html = (
+            '<button class="status-banner-link" id="legal-mem-clear-hint" type="button" '
+            'style="margin-left:6px;font-size:11px;">지금 초기화</button>'
+            if warn else ''
+        )
         mem_status.content = (
             '<div class="mem-bar">'
-            '<span>메모리</span>'
+            f'<span style="{"color:var(--danger);" if warn else ""}">메모리</span>'
             '<div class="bar">'
-            f'<div class="fill" style="width:{pct}%;"></div>'
+            f'<div class="fill" style="{fill_style}"></div>'
             '</div>'
-            f'<span>{chars:,} / {max_chars:,}자</span>'
+            f'<span style="{"color:var(--danger);" if warn else ""}">{chars:,} / {max_chars:,}자</span>'
+            f'{warn_html}'
             '</div>'
         )
 
@@ -170,6 +184,10 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 '<h2>법령에 관해 무엇이든 물어보세요</h2>'
                 '<p>사전 구축된 법령 FAISS 인덱스에서 의미적으로 유사한 조항을 찾아 답변합니다. '
                 '인용된 조항과 검색 키워드는 답변 하단에 표시됩니다.</p>'
+                '<p style="font-size:11.5px;color:var(--text-4);margin-top:-8px;">'
+                '검색 모드 안내 — <b>벡터 검색</b>: 임베딩 서버로 의미상 유사한 조항을 찾습니다 · '
+                '<b>키워드 검색</b>: 임베딩 서버 미연결 시 키워드로 대체 검색 · '
+                '<b>LLM 직접</b>: 법령 DB 없이 모델이 직접 답변합니다.</p>'
             )
             sugg_row = ui.element('div').classes('suggestion-grid')
 
@@ -177,8 +195,34 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
         with scroll_area:
             chat_inner = ui.element('div').classes('chat-inner')
 
-        # ── Composer ────────────────────────────────────────────────────
+        # ── C-4: 대화 시작 후에도 예시 질의에 접근 가능한 접이식 칩 ────────
         with ui.element('div').classes('composer-wrap'):
+            with ui.row().classes('items-center gap-2').style('padding:0 4px;'):
+                sugg_toggle_btn = ui.button('예시 질의 보기').props('flat dense no-caps').style(
+                    'font-size:11px;color:var(--text-3);padding:2px 6px;'
+                )
+            sugg_persist_row = ui.element('div').classes('suggestion-grid').style('display:none;margin:4px 0 8px;')
+            with sugg_persist_row:
+                for title, sub, prompt in _LEGAL_SUGGESTIONS:
+                    pb = ui.element('button').classes('suggestion')
+                    with pb:
+                        ui.html(
+                            f'<span class="s-title">{_html.escape(title)}</span>'
+                            f'<span class="s-sub">{_html.escape(sub)}</span>'
+                        )
+                    pb.on('click', lambda _e, p=prompt: asyncio.create_task(do_search(p)))
+
+            sugg_state = {'open': False}
+
+            def _toggle_persist_suggestions():
+                sugg_state['open'] = not sugg_state['open']
+                sugg_persist_row.style(
+                    'display:grid;margin:4px 0 8px;' if sugg_state['open'] else 'display:none;'
+                )
+                sugg_toggle_btn.text = '예시 질의 숨기기' if sugg_state['open'] else '예시 질의 보기'
+
+            sugg_toggle_btn.on_click(_toggle_persist_suggestions)
+
             with ui.element('div').classes('composer'):
                 query_input = ui.textarea(
                     placeholder='법률 질문을 입력하세요 — 예: 개인정보 보호법상 정보주체의 권리는?',
@@ -187,7 +231,7 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                     send_btn = ui.element('button').classes('send-btn')
                     send_btn.props('title="검색 (Enter)" aria-label="검색 실행"')
                     with send_btn:
-                        ui.html('<span class="material-symbols-outlined">arrow_upward</span>')
+                        send_btn_icon = ui.html('<span class="material-symbols-outlined">arrow_upward</span>')
             ui.html(
                 '<div class="composer-hint">'
                 '<span>Shift + Enter 줄바꿈</span>'
@@ -212,13 +256,31 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 '</div>'
             )
 
-    def _add_bot_bubble(result: dict):
+    _bubble_seq = {'n': 0}
+
+    def _doc_card_html(d: str) -> str:
+        snippet = _html.escape(d[:220]).replace('\n', ' ')
+        full = _html.escape(d).replace('\n', '<br>')
+        return (
+            '<div class="result-item" style="margin-top:8px;padding:10px 14px;">'
+            f'<div class="doc-snippet" style="font-size:12px;line-height:1.7;color:var(--text-2);">'
+            f'{snippet}…</div>'
+            f'<div class="doc-full" style="display:none;font-size:12px;line-height:1.7;'
+            f'color:var(--text-2);">{full}</div>'
+            '<button class="result-action-btn doc-toggle-btn" type="button" '
+            'style="margin-top:6px;">전체 보기</button>'
+            '</div>'
+        )
+
+    def _add_bot_bubble(result: dict, model_label: str = ''):
         answer = result.get('answer', '')
         keywords = result.get('keywords', [])
         docs = result.get('retrieved_docs', [])
         mode = result.get('search_mode', '')
 
         safe_answer = _html.escape(answer).replace('\n', '<br>')
+        _bubble_seq['n'] += 1
+        bubble_id = f'legal-answer-{_bubble_seq["n"]}'
 
         chips = []
         if keywords:
@@ -241,23 +303,45 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 '<span class="material-symbols-outlined">search</span>'
                 f'{mode_labels.get(mode, mode)}</span>'
             )
+        if model_label:
+            chips.append(
+                '<span class="meta-chip">'
+                '<span class="material-symbols-outlined">smart_toy</span>'
+                f'{_html.escape(model_label)}</span>'
+            )
         meta_html = ''.join(chips)
 
+        # C-1: 참고 조항 — 각 카드 "전체 보기" 확장 + 3개 초과분은 "N개 더 보기"
         docs_html = ''
         if docs:
-            cards = []
-            for d in docs[:3]:
-                snippet = _html.escape(d[:220]).replace('\n', ' ')
-                cards.append(
-                    '<div class="result-item" style="margin-top:8px;padding:10px 14px;">'
-                    f'<div style="font-size:12px;line-height:1.7;color:var(--text-2);">{snippet}…</div>'
-                    '</div>'
+            first_cards = ''.join(_doc_card_html(d) for d in docs[:3])
+            more_html = ''
+            if len(docs) > 3:
+                extra_cards = ''.join(_doc_card_html(d) for d in docs[3:])
+                more_html = (
+                    f'<div class="more-docs-wrap" style="display:none;">{extra_cards}</div>'
+                    '<button class="result-action-btn more-docs-btn" type="button" '
+                    f'style="margin-top:6px;">{len(docs) - 3}개 더 보기</button>'
                 )
             docs_html = (
                 '<div style="padding-left:30px;margin-top:6px;">'
-                f'<div class="muted-label" style="margin-bottom:0;">참고 조항/판례</div>{"".join(cards)}'
+                f'<div class="muted-label" style="margin-bottom:0;">참고 조항/판례'
+                ' <span style="font-weight:400;color:var(--text-4);">'
+                '(원 법령·조항 식별자는 색인에 없어 본문만 표시됩니다)</span></div>'
+                f'{first_cards}{more_html}'
                 '</div>'
             )
+
+        # C-3: 답변 복사 / 이어서 질문 액션
+        actions_html = (
+            '<div class="result-actions">'
+            '<button class="result-action-btn copy-answer-btn" type="button" '
+            f'data-copy-target="{bubble_id}">'
+            '<span class="material-symbols-outlined">content_copy</span>복사</button>'
+            '<button class="result-action-btn continue-ask-btn" type="button">'
+            '<span class="material-symbols-outlined">chat</span>이어서 질문</button>'
+            '</div>'
+        )
 
         with chat_inner:
             ui.html(
@@ -266,8 +350,10 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 '<span class="avatar">AI</span><span>어시스턴트</span>'
                 '</div>'
                 f'<div class="msg-body">{safe_answer}</div>'
+                f'<div id="{bubble_id}" style="display:none;">{_html.escape(answer)}</div>'
                 + (f'<div class="msg-meta">{meta_html}</div>' if meta_html else '')
                 + docs_html
+                + actions_html
                 + '</div>'
             )
             # ui.run_javascript는 slot 컨텍스트 필요 — with 블록 안에서 호출
@@ -277,24 +363,27 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
             )
 
     _search_busy = {'v': False}
+    _search_task_ctl: dict = {'task': None}
 
     def _set_search_busy(busy: bool):
-        """답변 생성 중 전송 버튼 비활성화 (+ _search_busy 로 중복 전송 차단)."""
+        """검색 중에는 전송 버튼을 [중지] 토글로 전환 (C-2: 스트리밍 취소 가능)."""
         _search_busy['v'] = busy
         try:
             if busy:
-                send_btn.props('disabled')
-                send_btn.classes(add='is-disabled')
+                send_btn.classes(add='is-stop')
+                send_btn.props('title="중지"')
+                send_btn_icon.content = '<span class="material-symbols-outlined">stop</span>'
             else:
-                send_btn.props(remove='disabled')
-                send_btn.classes(remove='is-disabled')
+                send_btn.classes(remove='is-stop')
+                send_btn.props('title="검색 (Enter)"')
+                send_btn_icon.content = '<span class="material-symbols-outlined">arrow_upward</span>'
         except Exception:
             pass
 
     async def do_search(prompt_text: str = None):
         _apply_current_user()
         if _search_busy['v']:
-            return  # 답변 생성 중 — 추가 전송 차단
+            return  # 답변 생성 중 — 추가 전송 차단 (중지는 send_btn 클릭 핸들러에서 별도 처리)
         query = (prompt_text if prompt_text is not None else (query_input.value or '')).strip()
         if not query:
             return
@@ -303,18 +392,29 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
             return
         _set_search_busy(True)
         query_input.value = ''
+        _search_task_ctl['task'] = asyncio.current_task()
         try:
             await _do_search_inner(query)
+        except asyncio.CancelledError:
+            ui.notify('검색을 중지했습니다.', type='warning', position='top')
         finally:
             _set_search_busy(False)
+            _search_task_ctl['task'] = None
             # 늦게 도착한 입력 이벤트로 인한 잔류 텍스트 제거
             query_input.value = ''
+
+    def _on_send_or_stop():
+        if _search_busy['v']:
+            if _search_task_ctl['task'] is not None:
+                _search_task_ctl['task'].cancel()
+            return
+        asyncio.create_task(do_search())
 
     async def _do_search_inner(query: str):
         log.info('법률검색 질의: %s', query[:120])
 
         # 사이드바에서 선택한 모델을 에이전트에 동기화 (검색마다 최신 선택 반영)
-        _sync_model()
+        current_model_label = _sync_model()
 
         _ensure_chat_visible()
         _add_user_bubble(query)
@@ -372,6 +472,22 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                     await asyncio.sleep(0)
                 elif kind == 'done':
                     result = payload
+        except asyncio.CancelledError:
+            try:
+                partial = ''.join(reply_parts)
+                loading_bubble.content = (
+                    '<div class="msg ai">'
+                    '<div class="msg-role">'
+                    '<span class="avatar">AI</span><span>어시스턴트</span>'
+                    '</div>'
+                    f'<div class="msg-body">{_html.escape(partial).replace(chr(10), "<br>")}'
+                    '<br><span style="color:var(--text-4);font-size:11.5px;">'
+                    '(사용자에 의해 중지됨)</span></div>'
+                    '</div>'
+                )
+            except (ValueError, RuntimeError):
+                pass
+            raise
         except Exception as exc:
             try:
                 loading_bubble.content = (
@@ -394,7 +510,7 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
         except (ValueError, RuntimeError) as _del_exc:
             log.debug("loading_bubble 제거 스킵: %s", _del_exc)
         if result is not None:
-            _add_bot_bubble(result)
+            _add_bot_bubble(result, model_label=current_model_label)
         _update_mem_status()
         activity_log.record('legal', query[:40], status='done')
 
@@ -417,7 +533,7 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
         await do_search()
 
     query_input.on('keydown.enter', _on_enter)
-    send_btn.on('click', lambda _e: asyncio.create_task(do_search()))
+    send_btn.on('click', lambda _e: _on_send_or_stop())
 
     def clear_conversation():
         agent.clear_history()
@@ -452,5 +568,64 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
                 'document.querySelectorAll(".chat-scroll").forEach(s => '
                 '{ s.scrollTop = s.scrollHeight; });'
             )
+
+    # ── C-1/C-3/C-5: 결과 카드 확장, 답변 복사/이어서 질문, 메모리 경고 클릭 위임 ──
+    ui.add_body_html('''
+<script>
+(function(){
+  document.addEventListener('click', function(e){
+    const toggleBtn = e.target.closest('.doc-toggle-btn');
+    if (toggleBtn) {
+      const card = toggleBtn.closest('.result-item');
+      const snip = card.querySelector('.doc-snippet');
+      const full = card.querySelector('.doc-full');
+      const showingFull = full.style.display !== 'none';
+      full.style.display = showingFull ? 'none' : 'block';
+      snip.style.display = showingFull ? 'block' : 'none';
+      toggleBtn.textContent = showingFull ? '전체 보기' : '접기';
+      return;
+    }
+    const moreBtn = e.target.closest('.more-docs-btn');
+    if (moreBtn) {
+      const wrap = moreBtn.previousElementSibling;
+      const showing = wrap.style.display !== 'none';
+      wrap.style.display = showing ? 'none' : 'block';
+      if (!showing) {
+        const n = wrap.querySelectorAll('.result-item').length;
+        moreBtn.textContent = '접기';
+      } else {
+        moreBtn.textContent = moreBtn.dataset.origText || moreBtn.textContent;
+      }
+      return;
+    }
+    const copyBtn = e.target.closest('.copy-answer-btn');
+    if (copyBtn) {
+      const targetId = copyBtn.getAttribute('data-copy-target');
+      const el = document.getElementById(targetId);
+      if (el && navigator.clipboard) {
+        navigator.clipboard.writeText(el.textContent).then(function(){
+          const orig = copyBtn.innerHTML;
+          copyBtn.innerHTML = '<span class="material-symbols-outlined">check</span>복사됨';
+          setTimeout(function(){ copyBtn.innerHTML = orig; }, 1500);
+        });
+      }
+      return;
+    }
+    const contBtn = e.target.closest('.continue-ask-btn');
+    if (contBtn) {
+      const wrap = contBtn.closest('.chat-wrap');
+      const ta = wrap ? wrap.querySelector('.composer textarea') : null;
+      if (ta) { ta.focus(); }
+      return;
+    }
+    const memClearBtn = e.target.closest('#legal-mem-clear-hint');
+    if (memClearBtn) {
+      document.getElementById('legal-clear-btn')?.click();
+      return;
+    }
+  });
+})();
+</script>
+''')
 
     _update_mem_status()

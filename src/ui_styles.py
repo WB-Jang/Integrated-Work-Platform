@@ -1132,6 +1132,10 @@ body[data-density="compact"] .tri-col-row { padding: 12px 16px; gap: 10px; }
   color: var(--text-4);
   cursor: not-allowed;
 }
+.send-btn.is-stop {
+  background: var(--danger);
+}
+.send-btn.is-stop:hover { background: var(--danger); opacity: .85; }
 .send-btn .material-symbols-outlined {
   font-size: 18px;
   font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 20;
