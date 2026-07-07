@@ -192,33 +192,9 @@ llm_status.detect(_config)
 import prompt_date
 prompt_date.install()
 
-# ── Phase 2 (ux/improvements): 공통 진행 상태·모델 컨텍스트 라벨 헬퍼 ──────────
-# 분석/요약/법률검색/규제동향 등 모든 장시간 LLM 작업이 동일한 모양의
-# 스피너+진행바+경과시간 카운터를 쓰도록 공용 HTML 조각을 생성한다.
-def progress_block_html(text: str, *, start_ts: float | None = None,
-                         cancel_id: str | None = None) -> str:
-    """start_ts: time.time() epoch seconds — 동일 작업의 재렌더 사이에도 경과시간이
-    누적 표시되도록, 작업 시작 시 한 번 얻은 값을 매 호출에 그대로 전달해야 한다."""
-    import time as _time
-    ts = start_ts if start_ts is not None else _time.time()
-    cancel_html = (
-        f'<button class="progress-cancel-btn" data-cancel-id="{_html.escape(cancel_id)}" '
-        'type="button" aria-label="작업 취소">'
-        '<span class="material-symbols-outlined">close</span>취소</button>'
-    ) if cancel_id else ''
-    return (
-        '<div class="progress-block">'
-        '<span class="material-symbols-outlined spin">progress_activity</span>'
-        '<div class="progress-block-body">'
-        f'<div class="progress-block-label"><span>{_html.escape(text)}</span>'
-        f'<span class="progress-block-elapsed" data-elapsed-since="{ts}">0초 경과</span></div>'
-        '<div class="progress-bar-track"><div class="progress-bar-fill"></div></div>'
-        '</div>'
-        f'{cancel_html}'
-        '</div>'
-    )
-
-
+# ── Phase 2 (ux/improvements): 실행 버튼 옆 모델 컨텍스트 라벨 헬퍼 ──────────
+# progress_block_html 등 공통 진행 컴포넌트는 ui_styles.py 에서 가져와 사용
+# (ux/screens 리베이스 시 중복 정의를 제거하고 단일 소스로 통합).
 def exec_context_label_html(model_label: str) -> str:
     """실행 버튼 옆에 붙이는 '이 작업은 {model}로 실행됩니다' 컨텍스트 라벨."""
     return (
