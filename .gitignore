@@ -22,6 +22,7 @@ logs/
 *.log
 launcher.log
 pip_install.log
+.nicegui/
 
 # ── 모델/대용량 자산 ───────────────────────────────────────────────────────
 models/
