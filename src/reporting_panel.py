@@ -104,6 +104,10 @@ def build_reporting_panel(config: dict):
                 '왼쪽에서 보고서를 선택하세요.</div>'
             )
 
+            # 단순 보고서용 진행 요약 바 — FX5260 등 다단계(wizard) 보고서는
+            # 자체 스텝퍼가 이미 진행 상태를 보여주므로 여기서는 표시하지 않는다.
+            progress_summary_el = ui.html('')
+
             upload_area = ui.column().classes('w-full')
             param_area = ui.column().classes('w-full mt-2')
             fx5260_area = ui.column().classes('w-full mt-2')   # FX5260 변동금리 분석 전용 영역
@@ -305,6 +309,7 @@ def build_reporting_panel(config: dict):
         report_key = state.get('selected')
         if not report_key:
             checklist_area.content = ''
+            progress_summary_el.content = ''
             return
         cfg = REPORT_CONFIGS[report_key]
         items = []
@@ -317,6 +322,23 @@ def build_reporting_panel(config: dict):
             filled = bool((inp.value or '').strip()) if inp else False
             items.append((p_def['label'], filled))
         checklist_area.content = req_checklist_html(items)
+
+        # 단순 보고서: 4단계 마법사를 강제하지 않는 대신, 진행 요약 한 줄만 보여준다.
+        # 다단계(wizard) 보고서는 자체 스텝퍼가 이미 이 역할을 하므로 생략.
+        if cfg.get('wizard'):
+            progress_summary_el.content = ''
+        else:
+            ok_count = sum(1 for _, ok in items)
+            total = len(items)
+            progress_summary_el.content = (
+                '<div style="display:flex;align-items:center;justify-content:space-between;'
+                'font-size:12px;color:var(--text-3);padding:6px 10px;margin-bottom:10px;'
+                'background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius);">'
+                f'<span style="color:var(--text-2);font-weight:600;">{_html.escape(cfg["name"])}</span>'
+                f'<span>충족 항목 {ok_count}/{total}</span>'
+                '</div>'
+            )
+
         if all(ok for _, ok in items):
             run_btn.props(remove='disable')
         else:
