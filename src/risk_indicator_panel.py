@@ -62,17 +62,16 @@ INDICATORS = [
      "warn": 0, "danger": 0, "desc": "은행 규모 지표."},
 ]
 
-# 분기 라벨 (최근 4분기)
-def _recent_quarters(n: int = 8) -> list[str]:
+# 월 라벨 (최근 n개월, 기준월 선택창에서 사용)
+def _recent_months(n: int = 12) -> list[str]:
     today = datetime.date.today()
     y, m = today.year, today.month
-    q = (m - 1) // 3 + 1
     out = []
     for _ in range(n):
-        out.append(f"{y}Q{q}")
-        q -= 1
-        if q == 0:
-            q = 4
+        out.append(f"{y}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12
             y -= 1
     return list(reversed(out))
 
@@ -93,16 +92,16 @@ def _mock_bank_indicators(bank_code: str) -> dict:
         "loan_dep":    round(rnd.uniform(92.0, 102.0), 1),
         "total_asset": round(rnd.uniform(180.0, 520.0), 1),
     }
-    # 분기별 시계열 — 마지막 분기는 base 값, 앞으로 갈수록 ±5% 변동
-    quarters = _recent_quarters(8)
+    # 월별 시계열 — 마지막 달은 base 값, 앞으로 갈수록 ±3~4% 변동
+    months = _recent_months(12)
     series = {k: [] for k in base}
     for k, v in base.items():
         cur = v * rnd.uniform(0.93, 1.05)
-        for _ in quarters:
-            cur = max(cur * rnd.uniform(0.96, 1.04), 0.01)
+        for _ in months:
+            cur = max(cur * rnd.uniform(0.97, 1.03), 0.01)
             series[k].append(round(cur, 2))
-        series[k][-1] = v   # 마지막 분기는 정확히 base 값
-    return {"latest": base, "series": series, "quarters": quarters}
+        series[k][-1] = v   # 마지막 달은 정확히 base 값
+    return {"latest": base, "series": series, "months": months}
 
 
 # ─── FSS API 호출 (실패 시 mock) ──────────────────────────────────────────────
@@ -203,8 +202,11 @@ def build_risk_indicator_panel(config: dict):
     api_key = os.environ.get("FSS_API_KEY", "").strip() or config.get("fss_api_key", "")
     has_real_data = bool(_fetch_from_fss(api_key, BANKS[0]["code"]))  # 현재는 항상 False
 
+    months_list = _recent_months(12)
+
     state = {
         "selected_bank": BANKS[0]["code"],
+        "month_idx": len(months_list) - 1,  # 기본값: 최신월
         "cache": {},  # bank_code -> indicators dict
     }
 
@@ -232,6 +234,19 @@ def build_risk_indicator_panel(config: dict):
         f'<div style="font-size:11.5px;color:var(--text-4);margin:-6px 0 10px;">'
         f'데이터 출처: {src_msg}</div>'
     )
+
+    # 기준월 선택 — 단일 은행 상세/은행 비교 탭 공용
+    with ui.element('div').style(
+        'display:flex;align-items:center;gap:10px;margin-bottom:14px;'
+    ):
+        ui.html(
+            '<span style="font-size:12px;color:var(--text-3);font-weight:600;">'
+            '기준월</span>'
+        )
+        month_select = ui.select(
+            options={i: m for i, m in enumerate(months_list)},
+            value=state["month_idx"],
+        ).props('outlined dense options-dense').classes('w-32')
 
     # ── 탭 ────────────────────────────────────────────────────────────────
     with ui.element('div').style(
@@ -312,18 +327,21 @@ def build_risk_indicator_panel(config: dict):
 
         def _render_detail():
             d = _data_for(state["selected_bank"])
-            latest = d["latest"]
             series = d["series"]
-            quarters = d["quarters"]
+            months = d["months"]
+            idx = state["month_idx"]
+            latest = {k: v[idx] for k, v in series.items()}
 
-            # 카드
+            # 카드 — 선택된 기준월 시점 값 (전월 대비 증감 표시)
             cards_grid.clear()
             with cards_grid:
                 for ind in INDICATORS:
-                    prev = series[ind["key"]][-2] if len(series[ind["key"]]) >= 2 else None
+                    prev = series[ind["key"]][idx - 1] if idx >= 1 else None
                     ui.html(_indicator_card_html(ind, latest[ind["key"]], prev))
 
-            # 시계열 차트
+            # 시계열 차트 — 기준월까지의 추이
+            trunc_series = {k: v[:idx + 1] for k, v in series.items()}
+            trunc_months = months[:idx + 1]
             chart_section.clear()
             with chart_section:
                 # 자본/자산건전성/수익성/유동성 4개 묶음
@@ -334,7 +352,7 @@ def build_risk_indicator_panel(config: dict):
                     ("유동성·예대율",  ["liquidity", "loan_dep"]),
                 ]
                 for title, keys in groups:
-                    ui.html(_svg_line_chart(title, keys, series, quarters))
+                    ui.html(_svg_line_chart(title, keys, trunc_series, trunc_months))
 
         def _on_bank_change(e):
             state["selected_bank"] = e.args if isinstance(e.args, str) else bank_select.value
@@ -368,10 +386,11 @@ def build_risk_indicator_panel(config: dict):
         def _render_compare():
             sel = ind_select.value
             ind = next(i for i in INDICATORS if i["key"] == sel)
+            idx = state["month_idx"]
             rows = []
             for b in BANKS:
                 d = _data_for(b["code"])
-                rows.append((b["name"], d["latest"][sel]))
+                rows.append((b["name"], d["series"][sel][idx]))
 
             # 정렬 (좋은 방향 우선)
             reverse = (ind["good"] != "down")
@@ -433,7 +452,7 @@ def build_risk_indicator_panel(config: dict):
                     f'{_html.escape(b["name"])}</td>'
                 ]
                 for i in INDICATORS:
-                    v = d["latest"][i["key"]]
+                    v = d["series"][i["key"]][idx]
                     status, color = _eval_status(i, v)
                     cells.append(
                         f'<td style="padding:8px 10px;font-size:12.5px;'
@@ -456,6 +475,14 @@ def build_risk_indicator_panel(config: dict):
             'update:model-value', lambda _e: _render_compare()
         )
         _render_compare()
+
+    # 기준월 변경 시 두 탭 모두 갱신
+    def _on_month_change(_e):
+        state["month_idx"] = month_select.value
+        _render_detail()
+        _render_compare()
+
+    month_select.on('update:model-value', _on_month_change)
 
     # 초기 탭 (Detail) 활성화
     _switch_tab('detail')
