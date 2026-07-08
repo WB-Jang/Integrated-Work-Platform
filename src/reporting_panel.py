@@ -10,7 +10,7 @@ import datetime
 import html as _html
 from pathlib import Path
 
-from nicegui import ui, events, run as nicegui_run
+from nicegui import ui, app, events, run as nicegui_run
 
 from reporting_runner import REPORT_CONFIGS, run_report, get_upload_dir, analyze_fx5260_var_accounts
 import activity_log
@@ -117,6 +117,11 @@ def build_reporting_panel(config: dict):
             run_btn = ui.button('실행').classes('btn-primary-mono w-full mt-3')
             run_btn.visible = False
 
+            # 반복 실행 편의 — 저장된 직전 파라미터가 있을 때만 노출.
+            # 파일은 세션마다 재업로드가 필요하므로 값만 복원한다.
+            restore_btn = ui.button('직전 설정으로 실행').props('outline dense no-caps').classes('w-full mt-2')
+            restore_btn.visible = False
+
             ui.html(
                 '<div class="muted-label" style="margin-top:16px;">메모 (저장되지 않음 — 세션 내 참고용)</div>'
             )
@@ -133,6 +138,14 @@ def build_reporting_panel(config: dict):
 
     param_inputs: dict = {}
     upload_widgets: dict = {}
+
+    def _saved_params_for(report_key: str) -> dict:
+        return app.storage.user.get('report_last_params', {}).get(report_key, {})
+
+    def _save_params_for(report_key: str, values: dict) -> None:
+        store = app.storage.user.setdefault('report_last_params', {})
+        store[report_key] = values
+        app.storage.user['report_last_params'] = store
 
     class _YymmValue:
         """연/월 select 두 개를 하나의 문자열 값으로 노출하는 어댑터.
@@ -462,6 +475,7 @@ def build_reporting_panel(config: dict):
         refresh_param_area(key)
         refresh_fx5260_area(key)
         run_btn.visible = True
+        restore_btn.visible = bool(_saved_params_for(key))
         download_area.clear()
         _set_status_badge('idle', '준비')
         update_log(f"[{cfg['name']}] 파일을 업로드하고 파라미터를 입력한 후 실행하세요.")
@@ -548,6 +562,9 @@ def build_reporting_panel(config: dict):
 
         if ok:
             _set_status_badge('done', '완료')
+            saved_vals = {pkey: (inp.value or '') for pkey, inp in param_inputs.items()}
+            _save_params_for(report_key, saved_vals)
+            restore_btn.visible = True
             add_chat_message('sys', f"{cfg['name']} 완료! 아래 다운로드 버튼을 이용하세요.")
             with download_area:
                 ui.html('<div class="muted-label">다운로드</div>')
@@ -570,4 +587,21 @@ def build_reporting_panel(config: dict):
             ui.notify('실행 오류 발생', type='negative', position='top')
             activity_log.record('report', cfg['name'], status='error')
 
+    def _fill_saved_params(report_key: str) -> None:
+        saved = _saved_params_for(report_key)
+        for pkey, val in saved.items():
+            inp = param_inputs.get(pkey)
+            if inp is None:
+                continue
+            if hasattr(inp, 'restore'):
+                inp.restore(val)
+            else:
+                inp.value = val
+        _refresh_checklist()
+
+    async def _run_with_saved():
+        _fill_saved_params(state['selected'])
+        await execute_report()
+
     run_btn.on_click(execute_report)
+    restore_btn.on_click(_run_with_saved)
