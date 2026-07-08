@@ -492,23 +492,16 @@ def build_reporting_panel(config: dict):
     for key in REPORT_CONFIGS:
         report_btns[key].on('click', lambda _e, k=key: asyncio.create_task(select_report(k)))
 
-    async def execute_report():
-        if state['running']:
-            return
-        report_key = state['selected']
-        if not report_key:
-            ui.notify('보고서를 먼저 선택하세요.', type='warning', position='top')
-            return
-
-        cfg = REPORT_CONFIGS[report_key]
-
+    def _validate_and_build_params(cfg: dict):
+        """필수 파일/파라미터를 검증하고 params dict 를 만든다.
+        실패 시 notify 를 띄우고 None 을 반환한다."""
         missing_files = [
             f_def['label'] for f_def in cfg['files']
             if f_def['key'] not in state['uploaded_files']
         ]
         if missing_files:
             ui.notify(f"필수 파일 미업로드: {', '.join(missing_files)}", type='warning', position='top')
-            return
+            return None
 
         params = {}
         for p_def in cfg['params']:
@@ -517,7 +510,7 @@ def build_reporting_panel(config: dict):
             val = (raw_val.value or '').strip() if raw_val else ''
             if not val and not p_def.get('optional', False):
                 ui.notify(f"필수 입력 누락: {p_def['label']}", type='warning', position='top')
-                return
+                return None
             ptype = p_def.get('type', 'str')
             try:
                 if val:
@@ -526,7 +519,12 @@ def build_reporting_panel(config: dict):
                     params[pkey] = ''
             except ValueError:
                 ui.notify(f"숫자 형식 오류: {p_def['label']}", type='negative', position='top')
-                return
+                return None
+        return params
+
+    async def execute_report(report_key: str, cfg: dict, params: dict):
+        if state['running']:
+            return
 
         state['running'] = True
         progress_bar.visible = True
@@ -599,9 +597,61 @@ def build_reporting_panel(config: dict):
                 inp.value = val
         _refresh_checklist()
 
-    async def _run_with_saved():
-        _fill_saved_params(state['selected'])
-        await execute_report()
+    def _run_summary_html(cfg: dict, params: dict) -> str:
+        """실행 직전 확인 요약: 보고서명 · 파일명(용량) · 기준월 · 첨부 파일 수."""
+        file_lines = []
+        for f_def in cfg['files']:
+            fp = state['uploaded_files'].get(f_def['key'])
+            if fp and os.path.exists(fp):
+                size_kb = os.path.getsize(fp) // 1024
+                file_lines.append(
+                    f"{_html.escape(f_def['label'])}: {_html.escape(Path(fp).name)} ({size_kb}KB)"
+                )
+        yymm_keys = ('yymm', 'bfyymm', 'base_yymm', 'base_ym')
+        yymm_vals = [str(params[k]) for k in yymm_keys if params.get(k)]
+        lines = [f"<b>{_html.escape(cfg['name'])}</b>"] + file_lines
+        if yymm_vals:
+            lines.append(f"기준월: {_html.escape(', '.join(yymm_vals))}")
+        lines.append(f"첨부 파일: {len(state['uploaded_files'])}건")
+        return (
+            '<div style="font-size:12.5px;color:var(--text-2);line-height:1.85;'
+            'background:var(--bg-elev);border:1px solid var(--border);'
+            'border-radius:var(--radius);padding:10px 14px;margin:8px 0;">'
+            + '<br>'.join(lines) +
+            '</div>'
+        )
 
-    run_btn.on_click(execute_report)
+    def _confirm_before_run():
+        report_key = state['selected']
+        if not report_key:
+            ui.notify('보고서를 먼저 선택하세요.', type='warning', position='top')
+            return
+        cfg = REPORT_CONFIGS[report_key]
+        params = _validate_and_build_params(cfg)
+        if params is None:
+            return
+
+        dlg = ui.dialog().props('persistent')
+        with dlg, ui.card():
+            ui.html(
+                '<div class="section-card-title">'
+                '<span class="material-symbols-outlined">fact_check</span>실행 전 확인'
+                '</div>'
+            )
+            ui.html(_run_summary_html(cfg, params))
+            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                ui.button('취소', on_click=dlg.close).props('flat dense no-caps')
+
+                def _confirm():
+                    dlg.close()
+                    asyncio.create_task(execute_report(report_key, cfg, params))
+
+                ui.button('실행', on_click=_confirm).classes('btn-primary-mono')
+        dlg.open()
+
+    def _run_with_saved():
+        _fill_saved_params(state['selected'])
+        _confirm_before_run()
+
+    run_btn.on_click(_confirm_before_run)
     restore_btn.on_click(_run_with_saved)
