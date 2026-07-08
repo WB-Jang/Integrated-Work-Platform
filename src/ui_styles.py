@@ -510,6 +510,20 @@ html body #main-nav * {
 .upload-compact .q-btn--dense { min-height: 24px !important; padding: 0 6px !important; }
 .upload-compact .q-btn--dense .q-icon { font-size: 17px !important; }
 
+/* 보고서 패널 전용 — 파일별 업로드가 필수 입력이라 드래그 가능함이 시각적으로
+   자명해야 한다. 다른 패널의 upload-compact 축소 트리거는 그대로 두고, 이
+   조합 클래스에만 점선 드롭존 테두리 + 안내 문구(label=)를 추가한다.
+   (class="upload-compact report-dropzone") */
+.upload-compact.report-dropzone.q-uploader {
+  border: 1px dashed var(--border-strong) !important;
+  background: var(--bg-elev) !important;
+}
+.upload-compact.report-dropzone .q-uploader__header-content { padding: 8px 10px !important; }
+.upload-compact.report-dropzone .q-uploader__title {
+  font-size: 12px !important;
+  color: var(--text-3) !important;
+}
+
 .q-expansion-item__container {
   border-radius: var(--radius) !important;
 }

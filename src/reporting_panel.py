@@ -6,6 +6,7 @@
 import os
 import json
 import asyncio
+import datetime
 import html as _html
 from pathlib import Path
 
@@ -129,6 +130,65 @@ def build_reporting_panel(config: dict):
     param_inputs: dict = {}
     upload_widgets: dict = {}
 
+    class _YymmValue:
+        """연/월 select 두 개를 하나의 문자열 값으로 노출하는 어댑터.
+        기존 코드는 param_inputs[key].value 로 문자열을 읽으므로, ui.input 과
+        동일한 인터페이스(.value)만 맞추면 execute_report 등을 그대로 재사용할 수 있다."""
+
+        def __init__(self, year_select, month_select, fmt: str):
+            self._y = year_select
+            self._m = month_select
+            self._fmt = fmt
+
+        @property
+        def value(self) -> str:
+            y, m = self._y.value, self._m.value
+            if y is None or m is None:
+                return ''
+            if self._fmt == 'YYMM':
+                return f'{y % 100:02d}{m:02d}'
+            if self._fmt == 'YYYY-MM':
+                return f'{y:04d}-{m:02d}'
+            return f'{y:04d}{m:02d}'  # YYYYMM
+
+        def restore(self, raw: str) -> None:
+            raw = (raw or '').strip()
+            if not raw:
+                return
+            try:
+                if self._fmt == 'YYYY-MM':
+                    y_s, m_s = raw.split('-')
+                    y, m = int(y_s), int(m_s)
+                elif self._fmt == 'YYMM':
+                    y, m = int(raw[:2]) + 2000, int(raw[2:4])
+                else:
+                    y, m = int(raw[:4]), int(raw[4:6])
+            except (ValueError, IndexError):
+                return
+            self._y.value = y
+            self._m.value = m
+
+    def _build_yymm_picker(label: str, fmt: str):
+        """연-월 파라미터용 선택창. 자유 텍스트 입력을 없애 오입력 자체를 차단한다."""
+        today = datetime.date.today()
+        years = list(range(today.year - 3, today.year + 1))
+        ui.html(
+            f'<div style="font-size:12px;color:var(--text-2);font-weight:500;'
+            f'margin-top:10px;">{_html.escape(label)}</div>'
+        )
+        with ui.row().classes('items-center gap-2 mt-1 no-wrap'):
+            year_sel = ui.select(options=years, value=today.year).props(
+                'outlined dense options-dense'
+            ).style('width:96px;')
+            ui.html('<span style="color:var(--text-4);">-</span>')
+            month_sel = ui.select(options=list(range(1, 13)), value=today.month).props(
+                'outlined dense options-dense'
+            ).style('width:74px;')
+        adapter = _YymmValue(year_sel, month_sel, fmt)
+        year_sel.on('update:model-value', lambda _e: _refresh_checklist())
+        month_sel.on('update:model-value', lambda _e: _refresh_checklist())
+        return adapter
+
     def add_chat_message(role: str, content: str):
         state['chat_messages'].append({'role': role, 'content': content})
         safe = _html.escape(content).replace('\n', '<br>')
@@ -213,7 +273,10 @@ def build_reporting_panel(config: dict):
                 w = ui.upload(
                     on_upload=handle_upload,
                     auto_upload=True, max_files=1,
-                ).props('accept=.csv,.xlsx,.xls flat bordered').classes('w-full upload-compact')
+                    label='파일을 여기로 드래그하거나 클릭',
+                ).props('accept=.csv,.xlsx,.xls flat bordered').classes(
+                    'w-full upload-compact report-dropzone'
+                )
                 upload_widgets[fkey] = w
 
     def refresh_param_area(report_key: str):
@@ -229,9 +292,12 @@ def build_reporting_panel(config: dict):
                 hint = p_def.get('hint', '')
                 optional = p_def.get('optional', False)
                 lbl = label + (' (선택)' if optional else '')
-                inp = ui.input(label=lbl, placeholder=hint or label).props('outlined dense').classes('w-full mt-1')
-                inp.on('blur', lambda: _refresh_checklist())
-                param_inputs[pkey] = inp
+                if p_def.get('type') == 'yymm':
+                    param_inputs[pkey] = _build_yymm_picker(lbl, p_def.get('format', 'YYYYMM'))
+                else:
+                    inp = ui.input(label=lbl, placeholder=hint or label).props('outlined dense').classes('w-full mt-1')
+                    inp.on('blur', lambda: _refresh_checklist())
+                    param_inputs[pkey] = inp
 
     def _refresh_checklist():
         """B-2: 필수 파일/파라미터 충족 여부를 상시 체크리스트로 표시하고,
@@ -287,13 +353,9 @@ def build_reporting_panel(config: dict):
                 base_inp = param_inputs.get('base_yymm')
                 base_raw = (base_inp.value or '').strip() if base_inp else ''
                 if not base_raw:
-                    ui.notify('기준년월(base_yymm)을 먼저 입력하세요.', type='warning', position='top')
+                    ui.notify('기준년월(base_yymm)을 먼저 선택하세요.', type='warning', position='top')
                     return
-                try:
-                    base_yymm = int(base_raw)
-                except ValueError:
-                    ui.notify('기준년월은 숫자 6자리(YYYYMM)여야 합니다.', type='negative', position='top')
-                    return
+                base_yymm = int(base_raw)
 
                 accounts = await nicegui_run.io_bound(
                     analyze_fx5260_var_accounts, state['uploaded_files'], base_yymm,

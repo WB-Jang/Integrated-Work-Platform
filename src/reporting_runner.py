@@ -66,8 +66,9 @@ REPORT_CONFIGS = {
             {"key": "crms", "label": "CRMS 외화대출 CSV", "hint": "인코딩: euc-kr"},
             {"key": "seq", "label": "외화대출 SEQ CSV", "hint": "인코딩: utf-8-sig"},
         ],
+        "wizard": True,
         "params": [
-            {"key": "base_yymm", "label": "기준년월 (YYYYMM, 예: 202602)", "type": "int"},
+            {"key": "base_yymm", "label": "기준년월", "type": "yymm", "format": "YYYYMM"},
             {"key": "writer_title", "label": "작성자 직책 (예: 팀장)", "type": "str"},
             {"key": "writer_name", "label": "작성자 성명", "type": "str"},
             {"key": "writer_phone", "label": "작성자 전화번호 (- 없이, 예: 0212345678)", "type": "str"},
@@ -118,7 +119,7 @@ REPORT_CONFIGS = {
             {"key": "classification", "label": "분류 CSV (classification)", "hint": "인코딩: euc-kr"},
         ],
         "params": [
-            {"key": "yymm", "label": "기준년월 (YYMM, 예: 2602)", "type": "str"},
+            {"key": "yymm", "label": "기준년월", "type": "yymm", "format": "YYMM"},
         ],
         "outputs": ["BOK_통계조사표_결과.csv"],
         "runner": "bok_statistical",
@@ -134,8 +135,8 @@ REPORT_CONFIGS = {
             {"key": "product_bc_retail", "label": "Product BC Retail CSV", "hint": "인코딩: euc-kr"},
         ],
         "params": [
-            {"key": "bfyymm", "label": "이전 기준년월 (YYMM, 예: 2601)", "type": "str"},
-            {"key": "yymm", "label": "이번 기준년월 (YYMM, 예: 2602)", "type": "str"},
+            {"key": "bfyymm", "label": "이전 기준년월", "type": "yymm", "format": "YYMM"},
+            {"key": "yymm", "label": "이번 기준년월", "type": "yymm", "format": "YYMM"},
         ],
         "outputs": ["LocalRIR_결과.csv"],
         "runner": "local_rir",
@@ -150,7 +151,7 @@ REPORT_CONFIGS = {
             {"key": "form", "label": "보고서 폼 템플릿 .xlsx", "hint": "결과가 채워질 양식 (워크시트 'new')"},
         ],
         "params": [
-            {"key": "base_ym", "label": "기준년월 (YYYY-MM, 예: 2026-04)", "type": "str"},
+            {"key": "base_ym", "label": "기준년월", "type": "yymm", "format": "YYYY-MM"},
             {"key": "dates", "label": "기간 라벨 4개 (쉼표, 예: Apr25,Jan26,Mar26,Apr26)", "type": "str"},
             {"key": "ea_purely",
              "label": "Early Alerts USDm 4개 (공백, 예: 100 200 300 400)",
@@ -172,7 +173,7 @@ REPORT_CONFIGS = {
             {"key": "main_debt_group", "label": "주채무그룹 CSV", "hint": "인코딩: utf-8-sig"},
         ],
         "params": [
-            {"key": "yymm", "label": "기준년월 (YYMM, 예: 2602)", "type": "str"},
+            {"key": "yymm", "label": "기준년월", "type": "yymm", "format": "YYMM"},
             {"key": "total_ead", "label": "Total EAD (예: 17687118)", "type": "float"},
         ],
         "outputs": ["RiskLimit_결과.csv"],
