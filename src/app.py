@@ -1196,30 +1196,59 @@ def main_page(request: Request):
     if (nav.dataset.delegated === '1') return;
     nav.dataset.delegated = '1';
 
+    // 드롭다운은 #main-nav(overflow-y:hidden) 밖 — body 에 "포탈"된 채로
+    // 관리되므로, 그룹키로 항상 document 전체에서 찾는다 (더 이상 .nav-group
+    // 의 자손이 아닐 수 있음).
+    function dropdownFor(group){
+      const gkey = group.getAttribute('data-group');
+      return document.querySelector('.nav-dropdown[data-group-menu="' + gkey + '"]');
+    }
+
     function closeAllGroups(except){
-      nav.querySelectorAll('.nav-group.open').forEach(function(g){
+      document.querySelectorAll('.nav-group.open').forEach(function(g){
         if (g !== except) {
           g.classList.remove('open');
           const btn = g.querySelector('.nav-group-btn');
           if (btn) btn.setAttribute('aria-expanded', 'false');
+          const dd = dropdownFor(g);
+          if (dd) dd.classList.remove('open');
         }
       });
     }
 
-    // 그룹 토글 열기/닫기 + leaf 클릭 라우팅
-    nav.addEventListener('click', function(e){
+    function openGroup(toggle, group){
+      const dd = dropdownFor(group);
+      if (!dd) return;
+      if (dd.parentElement !== document.body) document.body.appendChild(dd);
+      const r = toggle.getBoundingClientRect();
+      dd.style.top = (r.bottom + 4) + 'px';
+      dd.style.left = r.left + 'px';
+      dd.classList.add('open');
+      group.classList.add('open');
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+
+    // 그룹 토글 열기/닫기 + leaf 클릭 라우팅 (드롭다운이 body 로 옮겨질 수
+    // 있으므로 nav 가 아닌 document 레벨에서 위임)
+    document.addEventListener('click', function(e){
       const toggle = e.target.closest('[data-group-toggle]');
       if (toggle) {
         const group = toggle.closest('.nav-group');
         const isOpen = group.classList.contains('open');
         closeAllGroups(isOpen ? null : group);
-        group.classList.toggle('open', !isOpen);
-        toggle.setAttribute('aria-expanded', String(!isOpen));
+        if (isOpen) {
+          group.classList.remove('open');
+          toggle.setAttribute('aria-expanded', 'false');
+          const dd = dropdownFor(group);
+          if (dd) dd.classList.remove('open');
+        } else {
+          openGroup(toggle, group);
+        }
         e.stopPropagation();
         return;
       }
       const item = e.target.closest('[data-nav-key]');
-      if (item && nav.contains(item)) {
+      if (item) {
         const k = item.getAttribute('data-nav-key');
         const trig = document.getElementById('_nav_trigger_' + k);
         if (trig) trig.click();
@@ -1227,13 +1256,31 @@ def main_page(request: Request):
       }
     });
 
-    // 바깥 클릭 / Escape 로 드롭다운 닫기
+    // 바깥 클릭 / Escape / nav 가로 스크롤 로 드롭다운 닫기
+    // (드롭다운이 body 에 있을 수 있으므로 nav.contains 뿐 아니라
+    //  .nav-dropdown 내부 클릭도 "안쪽"으로 취급)
     document.addEventListener('click', function(e){
-      if (!nav.contains(e.target)) closeAllGroups(null);
+      if (!nav.contains(e.target) && !e.target.closest('.nav-dropdown')) closeAllGroups(null);
     });
     document.addEventListener('keydown', function(e){
       if (e.key === 'Escape') closeAllGroups(null);
     });
+    // nav를 가로로 스크롤하는 동안에는 열려 있는 드롭다운을 닫는 대신 버튼을
+    // 따라 재배치한다. (닫아버리면: 클릭 액션이 대상 버튼을 보이게 하려고
+    // 내부적으로 scrollIntoView류 보정을 하면서 같은 클릭 안에서 scroll
+    // 이벤트가 먼저 발생해, 방금 그 클릭으로 연 드롭다운이 즉시 닫혀버리는
+    // 버그가 있었다 — 자동화 도구뿐 아니라 키보드 포커스 이동에서도 재현 가능.)
+    nav.addEventListener('scroll', function(){
+      const openGroupEl = nav.querySelector('.nav-group.open');
+      if (!openGroupEl) return;
+      const toggle = openGroupEl.querySelector('.nav-group-btn');
+      const dd = dropdownFor(openGroupEl);
+      if (!toggle || !dd) return;
+      const r = toggle.getBoundingClientRect();
+      dd.style.top = (r.bottom + 4) + 'px';
+      dd.style.left = r.left + 'px';
+    }, { passive: true });
+    window.addEventListener('resize', function(){ closeAllGroups(null); });
 
     // 세로 휠 스크롤을 가로 스크롤로 변환 (탭이 화면 폭을 넘칠 때)
     nav.addEventListener('wheel', function(e){
@@ -1267,7 +1314,17 @@ def main_page(request: Request):
     // ── 활성 탭이 항상 보이도록 scrollLeft 직접 계산 (scrollIntoView 미사용 —
     //    부모 레이아웃에 영향을 주는 브라우저 스크롤 앵커링 문제 회피) ──────
     window.__navScrollToActive = function(key){
-      const el = document.getElementById('tab-' + key);
+      let el = document.getElementById('tab-' + key);
+      // 드롭다운 항목은 열릴 때 body 로 포탈되어 nav 밖에 있을 수 있다 — 이때
+      // el.closest('.nav-group')는 더 이상 못 찾으므로(포탈로 조상 관계가
+      //끊김), 감싸는 .nav-dropdown의 data-group-menu로 그룹을 역참조해
+      // 소속 그룹의 토글 버튼을 대신 스크롤 대상으로 삼는다.
+      if (el && !nav.contains(el)) {
+        const dropdown = el.closest('.nav-dropdown');
+        const gkey = dropdown ? dropdown.getAttribute('data-group-menu') : null;
+        const group = gkey ? nav.querySelector('.nav-group[data-group="' + gkey + '"]') : null;
+        el = (group && group.querySelector('.nav-group-btn')) || null;
+      }
       if (!el || !nav.contains(el)) return;
       const elLeft = el.offsetLeft;
       const elRight = elLeft + el.offsetWidth;
@@ -2512,9 +2569,11 @@ def main_page(request: Request):
         # (scrollIntoView는 상위 레이아웃 스크롤까지 흔들 수 있어 사용하지 않고,
         #  #main-nav 자체의 scrollLeft만 __navScrollToActive 에서 직접 계산한다.)
         ui.run_javascript(
-            "document.querySelectorAll('#main-nav [data-nav-key]').forEach("
+            # 드롭다운 항목은 열릴 때 body 로 "포탈"되어 더 이상 #main-nav 의
+            # 자손이 아닐 수 있으므로, [data-nav-key] 검색은 문서 전체를 대상으로 한다.
+            "document.querySelectorAll('[data-nav-key]').forEach("
             "el => { el.classList.remove('active'); el.removeAttribute('aria-current'); });"
-            f"const t = document.querySelector('#main-nav [data-nav-key=\"{key}\"]');"
+            f"const t = document.querySelector('[data-nav-key=\"{key}\"]');"
             "if (t) { t.classList.add('active'); t.setAttribute('aria-current', 'page'); }"
             "document.querySelectorAll('#main-nav .nav-group').forEach("
             "g => g.classList.remove('has-active'));"

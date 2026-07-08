@@ -163,6 +163,18 @@ html body #main-nav * {
   scrollbar-width: thin;
   -webkit-overflow-scrolling: touch;
 }
+/* #main-nav 의 실제 직계 자식은 ui.html() 호출이 만드는 NiceGUI 래퍼 div
+   하나뿐이라 #main-nav 자체의 display:flex 는 그 래퍼에만 적용되고, 래퍼
+   내부의 버튼/그룹들은 일반 인라인 흐름(텍스트처럼 줄바꿈되는)으로 배치된다.
+   탭 개수가 늘어 한 줄 너비를 넘기면 텍스트처럼 다음 줄로 "줄바꿈"되어
+   버튼들이 두 번째 줄(y 좌표가 다른 곳)로 밀려나고, 그 줄은 #main-nav 의
+   overflow-y:hidden 에 가려 화면에 전혀 안 보이게 된다(가로 스크롤바 유무만
+   보면 정상처럼 보여서 자동화 테스트로 놓치기 쉬움). 래퍼 div를 구조적으로
+   선택해 그 자체를 flex 컨테이너로 만들어 줄바꿈을 원천 차단한다. */
+#main-nav > div {
+  display: flex; align-items: stretch; height: 100%;
+  min-width: -moz-max-content; min-width: max-content;
+}
 /* 탭이 화면 폭을 넘칠 때 스크롤 가능함을 항상 알아볼 수 있도록 — 숨김 대신
    상시 표시 (탭이 "사라진" 것처럼 보이는 문제 방지) */
 #main-nav::-webkit-scrollbar { height: 5px; }
@@ -213,14 +225,23 @@ html body #main-nav * {
   content: ''; position: absolute; bottom: 0; left: 16px; right: 16px;
   height: 2px; background: var(--accent); border-radius: 1px;
 }
+/* #main-nav 는 overflow-y:hidden 이라 자식으로 둔 채로는 드롭다운이 header
+   아래로 빠져나가는 부분이 통째로 잘려 안 보인다(getBoundingClientRect/
+   getComputedStyle 상으로는 display:block·정상 크기로 보이지만 실제 페인트는
+   조상의 overflow 클리핑에 가려짐 — Playwright is_visible() 같은 자동화
+   체크로는 못 잡고 스크린샷으로만 드러나는 종류의 버그).
+   그래서 열릴 때 JS가 body 로 reparent 하고 position:fixed 로 버튼 아래에
+   직접 좌표를 계산해 배치한다("포탈" 패턴 — 커맨드 팔레트 오버레이와 동일
+   레이어). display 토글도 .nav-group.open 자손 선택자 대신 드롭다운 자신의
+   .open 클래스로 한다(reparent 후에는 더 이상 .nav-group 의 자손이 아니므로). */
 .nav-dropdown {
   display: none;
-  position: absolute; top: 100%; left: 0; margin-top: 4px;
+  position: fixed;
   min-width: 210px; background: var(--bg-elev); border: 1px solid var(--border-strong);
   border-radius: var(--radius); box-shadow: 0 12px 28px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.4);
-  padding: 4px; z-index: 40;
+  padding: 4px; z-index: 200;
 }
-.nav-group.open .nav-dropdown { display: block; }
+.nav-dropdown.open { display: block; }
 .nav-dropdown-item {
   display: flex; align-items: center; gap: 8px; width: 100%;
   background: transparent !important; border: none; cursor: pointer;
