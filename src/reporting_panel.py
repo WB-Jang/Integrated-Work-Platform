@@ -213,7 +213,7 @@ def build_reporting_panel(config: dict):
                 w = ui.upload(
                     on_upload=handle_upload,
                     auto_upload=True, max_files=1,
-                ).props('accept=.csv,.xlsx,.xls flat bordered').classes('w-full')
+                ).props('accept=.csv,.xlsx,.xls flat bordered').classes('w-full upload-compact')
                 upload_widgets[fkey] = w
 
     def refresh_param_area(report_key: str):

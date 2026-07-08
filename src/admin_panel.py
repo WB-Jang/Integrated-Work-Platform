@@ -384,7 +384,7 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
 
                 upload = ui.upload(
                     multiple=True, label='파일 선택', auto_upload=True,
-                ).props('accept=.docx,.pdf,.txt,.hwp,.hwpx flat bordered').classes('w-full mb-3')
+                ).props('accept=.docx,.pdf,.txt,.hwp,.hwpx flat bordered').classes('w-full mb-3 upload-compact')
 
                 uploaded_paths: list = []
                 uploaded_label = ui.html(

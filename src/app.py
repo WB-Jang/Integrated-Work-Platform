@@ -3140,7 +3140,7 @@ def _build_qa_panel(parent, state, create_llm_fn):
                 with ui.element('div').classes('pane-body').style('display:flex;flex-direction:column;'):
                     qrefs['upload'] = ui.upload(
                         auto_upload=True, multiple=True,
-                    ).props('accept=.docx,.pdf,.hwp,.hwpx,.txt flat bordered').classes('w-full')
+                    ).props('accept=.docx,.pdf,.hwp,.hwpx,.txt flat bordered').classes('w-full upload-compact')
 
                     qrefs['file_list'] = ui.column().classes('w-full').style(
                         'gap:4px;margin-top:10px;'
@@ -3817,8 +3817,8 @@ def _build_convert_panel(parent, state):
 
             upload_widget = ui.upload(
                 on_upload=handle_upload, multiple=True, auto_upload=True,
-                label='파일을 드래그·앤·드롭하거나 클릭하여 업로드',
-            ).classes('w-full mb-4').props('max-file-size=52428800 flat bordered')
+                label='파일 추가',
+            ).classes('w-full mb-4 upload-compact').props('max-file-size=52428800 flat bordered')
             ui.button('업로드한 파일 변환 시작', on_click=run_conversion).classes(
                 'btn-primary-mono w-full mb-4'
             )

@@ -479,16 +479,36 @@ html body #main-nav * {
 .q-uploader__title { font-size: 12.5px !important; }
 .q-uploader__list { background: transparent !important; }
 
-/* 업로드존 축소판 — 문서분석/문서요약 좌측 컬럼처럼 업로드 영역을 약 30%
-   더 작게 보여줘야 하는 화면에서 사용 (class="upload-compact") */
-.upload-compact.q-uploader { min-height: 0 !important; }
-.upload-compact .q-uploader__header-content { padding: 2px 0 !important; }
-.upload-compact .q-uploader__header .q-gutter-xs { padding: 4px 6px !important; }
-.upload-compact .q-uploader__title { font-size: 11px !important; }
-.upload-compact .q-uploader__subtitle { font-size: 9.5px !important; }
-.upload-compact .q-uploader__list { min-height: 0 !important; padding: 0 !important; }
-.upload-compact .q-btn--dense { min-height: 22px !important; padding: 0 4px !important; }
-.upload-compact .q-btn--dense .q-icon { font-size: 18px !important; }
+/* 업로드 트리거 축소판 — shadcn Attachment 참조: 큰 점선 드롭존 대신 작고
+   동적인 인라인 바 형태로 축소. 대부분의 패널은 별도 커스텀 HTML로 파일 목록을
+   렌더링해 QUploader 자체 리스트를 즉시 비우지만, PDF 변환 패널처럼 변환 시작
+   전까지 QUploader 리스트 자체가 유일한 파일 확인 수단인 곳도 있어 리스트는
+   숨기지 않고 행 높이만 축소한다. 바이트 카운터 서브타이틀만 숨긴다.
+   (class="upload-compact") */
+.upload-compact.q-uploader {
+  min-height: 0 !important;
+  width: auto !important;
+  max-width: 100%;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  background: transparent !important;
+}
+.upload-compact .q-uploader__header {
+  background: var(--bg-elev) !important;
+  border-bottom: none !important;
+  min-height: 0 !important;
+}
+.upload-compact .q-uploader__header-content { padding: 3px 6px !important; }
+.upload-compact .q-uploader__header .q-gutter-xs { padding: 2px 4px !important; }
+.upload-compact .q-uploader__title { font-size: 11.5px !important; color: var(--text-2) !important; }
+.upload-compact .q-uploader__subtitle { display: none !important; }
+.upload-compact .q-uploader__list { min-height: 0 !important; padding: 2px !important; }
+.upload-compact .q-uploader__list .q-item { min-height: 32px !important; padding: 2px 6px !important; }
+.upload-compact .q-uploader__list .q-item__label { font-size: 11.5px !important; }
+.upload-compact .q-uploader__list .q-item__section--avatar { min-width: 28px !important; }
+.upload-compact .q-uploader__dnd { border: none !important; }
+.upload-compact .q-btn--dense { min-height: 24px !important; padding: 0 6px !important; }
+.upload-compact .q-btn--dense .q-icon { font-size: 17px !important; }
 
 .q-expansion-item__container {
   border-radius: var(--radius) !important;
