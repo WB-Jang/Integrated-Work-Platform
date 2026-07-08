@@ -443,6 +443,8 @@ def build_reporting_panel(config: dict):
         download_area.clear()
         _set_status_badge('idle', '준비')
         update_log(f"[{cfg['name']}] 파일을 업로드하고 파라미터를 입력한 후 실행하세요.")
+        log_el.visible = False
+        log_toggle_btn.text = '자세히 보기 (원시 로그)'
         _refresh_checklist()
 
         if key == 'fx5260':
@@ -496,6 +498,8 @@ def build_reporting_panel(config: dict):
         download_area.clear()
         _set_status_badge('reviewing', '실행 중')
         update_log(f"[{cfg['name']}] 실행 중...\n")
+        log_el.visible = False
+        log_toggle_btn.text = '자세히 보기 (원시 로그)'
         add_chat_message('sys', f"{cfg['name']} 실행 시작")
 
         try:
@@ -537,6 +541,9 @@ def build_reporting_panel(config: dict):
             activity_log.record('report', cfg['name'], status='done')
         else:
             _set_status_badge('error', '오류')
+            # 오류 시에는 원인 파악을 위해 클릭 없이 원시 로그를 바로 펼친다.
+            log_el.visible = True
+            log_toggle_btn.text = '숨기기 (원시 로그)'
             add_chat_message('sys', '실행 중 오류가 발생했습니다. 로그를 확인하세요.')
             ui.notify('실행 오류 발생', type='negative', position='top')
             activity_log.record('report', cfg['name'], status='error')
