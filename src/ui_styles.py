@@ -801,9 +801,9 @@ select.inp option { background: var(--bg-elev); color: var(--text); }
   border: 1px solid var(--border);
 }
 .tag.solid {
-  background: var(--text);
+  background: var(--accent);
   color: #fff;
-  border-color: var(--text);
+  border-color: var(--accent);
 }
 
 /* Reg/news card */
