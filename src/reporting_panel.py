@@ -1,8 +1,8 @@
 """
 보고서 작성 패널 UI — 모노크롬 디자인 시스템 이식판
 
-3-column 레이아웃: 좌측 보고서 목록 · 중앙 파일 업로드/파라미터 입력 ·
-우측 AI 어시스턴트 채팅 + 실행 로그.
+3-column 레이아웃: 좌측 보고서 목록 · 중앙 파일 업로드/파라미터 입력 +
+실행 로그 · 우측 AI 어시스턴트 채팅.
 """
 import os
 import json
@@ -52,7 +52,7 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
             '</div>'
         )
 
-    # ── 본문: 3분할 (보고서 목록 / 업로드·파라미터 / AI 어시스턴트+로그) ──
+    # ── 본문: 3분할 (보고서 목록 / 업로드·파라미터+로그 / AI 어시스턴트) ──
     with ui.element('div').classes('tri-col-row'):
 
         # ── 좌측: 보고서 목록 ────────────────────────────────────────────
@@ -97,7 +97,39 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
             restore_btn = ui.button('직전 설정으로 실행').props('outline dense no-caps').classes('w-full mt-2')
             restore_btn.visible = False
 
-        # ── 우측: AI 어시스턴트 채팅 + 실행 로그 ──────────────────────────
+            ui.html('<div class="divider" style="margin:16px 0 10px;"></div>')
+            ui.html(
+                '<div class="section-card-title">'
+                '<span class="material-symbols-outlined">terminal</span>실행 로그'
+                '</div>'
+            )
+            status_badge_el = ui.html(
+                '<span class="badge-idle">준비</span>'
+            )
+
+            def _set_status_badge(kind: str, label: str) -> None:
+                status_badge_el.content = f'<span class="badge-{kind}">{_html.escape(label)}</span>'
+            progress_bar = ui.linear_progress(value=0).props('indeterminate').classes('w-full mt-2')
+            progress_bar.visible = False
+            log_toggle_btn = ui.button('자세히 보기 (원시 로그)').props('flat dense no-caps').classes('mt-2').style(
+                'align-self:flex-start;font-size:11.5px;color:var(--text-3);padding:2px 4px;'
+            )
+            log_el = ui.html(
+                '<div class="log-area">'
+                '<span style="color:#737373;">보고서를 선택하고 실행하세요.</span>'
+                '</div>'
+            )
+            log_el.visible = False
+            download_area = ui.column().classes('w-full mt-3')
+
+            def _toggle_log():
+                log_el.visible = not log_el.visible
+                log_toggle_btn.text = (
+                    '숨기기 (원시 로그)' if log_el.visible else '자세히 보기 (원시 로그)'
+                )
+            log_toggle_btn.on_click(_toggle_log)
+
+        # ── 우측: AI 어시스턴트 채팅 ──────────────────────────────────────
         with ui.element('div').style('display:flex; flex-direction:column;'):
             ui.html(
                 '<div class="section-card-title">'
@@ -105,8 +137,7 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
                 '</div>'
             )
             with ui.element('div').classes('chat-wrap').style(
-                'flex:0 0 340px; height:340px; border:1px solid var(--border);'
-                'border-radius:var(--radius);margin-bottom:16px;'
+                'border:1px solid var(--border); border-radius:var(--radius);'
             ):
                 chat_empty_el = ui.element('div').classes('chat-empty')
                 with chat_empty_el:
@@ -139,37 +170,6 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
                             assistant_send_btn.props('title="전송 (Enter)" aria-label="메시지 전송"')
                             with assistant_send_btn:
                                 ui.html('<span class="material-symbols-outlined">arrow_upward</span>')
-
-            ui.html(
-                '<div class="section-card-title">'
-                '<span class="material-symbols-outlined">terminal</span>실행 로그'
-                '</div>'
-            )
-            status_badge_el = ui.html(
-                '<span class="badge-idle">준비</span>'
-            )
-
-            def _set_status_badge(kind: str, label: str) -> None:
-                status_badge_el.content = f'<span class="badge-{kind}">{_html.escape(label)}</span>'
-            progress_bar = ui.linear_progress(value=0).props('indeterminate').classes('w-full mt-2')
-            progress_bar.visible = False
-            log_toggle_btn = ui.button('자세히 보기 (원시 로그)').props('flat dense no-caps').classes('mt-2').style(
-                'align-self:flex-start;font-size:11.5px;color:var(--text-3);padding:2px 4px;'
-            )
-            log_el = ui.html(
-                '<div class="log-area">'
-                '<span style="color:#737373;">보고서를 선택하고 실행하세요.</span>'
-                '</div>'
-            )
-            log_el.visible = False
-            download_area = ui.column().classes('w-full mt-3')
-
-            def _toggle_log():
-                log_el.visible = not log_el.visible
-                log_toggle_btn.text = (
-                    '숨기기 (원시 로그)' if log_el.visible else '자세히 보기 (원시 로그)'
-                )
-            log_toggle_btn.on_click(_toggle_log)
 
     # ─── 이벤트 / 헬퍼 ───────────────────────────────────────────────────
 
