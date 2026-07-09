@@ -1,7 +1,8 @@
 """
 보고서 작성 패널 UI — 모노크롬 디자인 시스템 이식판
 
-3-column 레이아웃: 좌측 보고서 목록 · 중앙 실행 로그 · 우측 입력/채팅.
+3-column 레이아웃: 좌측 보고서 목록 · 중앙 파일 업로드/파라미터 입력 ·
+우측 AI 어시스턴트 채팅 + 실행 로그.
 """
 import os
 import json
@@ -14,15 +15,22 @@ from nicegui import ui, app, events, run as nicegui_run
 
 from reporting_runner import REPORT_CONFIGS, run_report, get_upload_dir, analyze_fx5260_var_accounts
 import activity_log
+import llm_status
 from ui_styles import req_checklist_html, step_list_html
 
 _FX5260_STEPS = ['변동금리 분석', '금리 입력', '금리 적용', '실행']
 
 
-def build_reporting_panel(config: dict):
+def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
     """보고서 작성 패널을 현재 NiceGUI 컨텍스트에 추가합니다.
 
     호출하는 쪽에서 ``.panel`` 컨테이너 안에 배치해 주세요 (page-head 포함).
+
+    Args:
+        create_llm_fn: ``app.py`` 의 ``create_llm(model_id=None)`` 팩토리.
+            우측 AI 어시스턴트 채팅이 이 함수로 LLM 을 생성해 사용한다.
+        app_state: 상단 네비게이션의 ``selected_model_id``/``persona_block`` 등을
+            담고 있는 페이지 전역 state dict (QA 패널과 동일한 것을 공유).
     """
 
     state = {
@@ -32,7 +40,7 @@ def build_reporting_panel(config: dict):
         "params": {},
         "output_files": [],
         "running": False,
-        "chat_messages": [],
+        "last_log_text": "",
     }
 
     # ── 헤더 ─────────────────────────────────────────────────────────────
@@ -44,7 +52,7 @@ def build_reporting_panel(config: dict):
             '</div>'
         )
 
-    # ── 본문: 3분할 (보고서 목록 / 로그 / 입력) ──────────────────────────
+    # ── 본문: 3분할 (보고서 목록 / 업로드·파라미터 / AI 어시스턴트+로그) ──
     with ui.element('div').classes('tri-col-row'):
 
         # ── 좌측: 보고서 목록 ────────────────────────────────────────────
@@ -57,8 +65,81 @@ def build_reporting_panel(config: dict):
                     ui.html(f'<span>{_html.escape(cfg["name"])}</span>')
                 report_btns[key] = btn
 
-        # ── 중앙: 실행 로그 ──────────────────────────────────────────────
+        # ── 중앙: 파일 업로드 / 파라미터 입력 ─────────────────────────────
         with ui.element('div').style('display:flex; flex-direction:column;'):
+            ui.html(
+                '<div class="section-card-title">'
+                '<span class="material-symbols-outlined">edit_note</span>파일 업로드 / 파라미터'
+                '</div>'
+            )
+
+            hint_label = ui.html(
+                '<div class="muted-text" style="padding:10px 12px;background:var(--bg-elev);'
+                'border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;">'
+                '왼쪽에서 보고서를 선택하세요.</div>'
+            )
+
+            # 단순 보고서용 진행 요약 바 — FX5260 등 다단계(wizard) 보고서는
+            # 자체 스텝퍼가 이미 진행 상태를 보여주므로 여기서는 표시하지 않는다.
+            progress_summary_el = ui.html('')
+
+            upload_area = ui.column().classes('w-full')
+            param_area = ui.column().classes('w-full mt-2')
+            fx5260_area = ui.column().classes('w-full mt-2')   # FX5260 변동금리 분석 전용 영역
+
+            checklist_area = ui.html('')
+
+            run_btn = ui.button('실행').classes('btn-primary-mono w-full mt-3')
+            run_btn.visible = False
+
+            # 반복 실행 편의 — 저장된 직전 파라미터가 있을 때만 노출.
+            # 파일은 세션마다 재업로드가 필요하므로 값만 복원한다.
+            restore_btn = ui.button('직전 설정으로 실행').props('outline dense no-caps').classes('w-full mt-2')
+            restore_btn.visible = False
+
+        # ── 우측: AI 어시스턴트 채팅 + 실행 로그 ──────────────────────────
+        with ui.element('div').style('display:flex; flex-direction:column;'):
+            ui.html(
+                '<div class="section-card-title">'
+                '<span class="material-symbols-outlined">smart_toy</span>AI 어시스턴트'
+                '</div>'
+            )
+            with ui.element('div').classes('chat-wrap').style(
+                'flex:0 0 340px; height:340px; border:1px solid var(--border);'
+                'border-radius:var(--radius);margin-bottom:16px;'
+            ):
+                chat_empty_el = ui.element('div').classes('chat-empty')
+                with chat_empty_el:
+                    ui.html(
+                        '<div class="empty-mark">'
+                        '<span class="material-symbols-outlined">smart_toy</span>'
+                        '</div>'
+                        '<h2 style="font-size:14px;">보고서 작성에 대해 물어보세요</h2>'
+                        '<p style="font-size:12px;">필요한 파일·파라미터, 진행 상태, 직전 실행 '
+                        '결과나 오류 원인 등을 답해드립니다.</p>'
+                    )
+
+                chat_scroll_el = ui.element('div').classes('chat-scroll').style('display:none;')
+                with chat_scroll_el:
+                    chat_inner_el = ui.element('div').classes('chat-inner')
+
+                with ui.element('div').classes('composer-wrap'):
+                    with ui.element('div').classes('composer'):
+                        assistant_input = ui.textarea(
+                            placeholder='보고서 작성에 대해 질문하세요…',
+                        ).props('borderless autogrow rows=1 dense').classes('flex-1')
+
+                        with ui.element('div').classes('composer-actions'):
+                            assistant_clear_btn = ui.element('button').classes('icon-btn')
+                            assistant_clear_btn.props('title="대화 초기화" aria-label="대화 초기화"')
+                            with assistant_clear_btn:
+                                ui.html('<span class="material-symbols-outlined">restart_alt</span>')
+
+                            assistant_send_btn = ui.element('button').classes('send-btn')
+                            assistant_send_btn.props('title="전송 (Enter)" aria-label="메시지 전송"')
+                            with assistant_send_btn:
+                                ui.html('<span class="material-symbols-outlined">arrow_upward</span>')
+
             ui.html(
                 '<div class="section-card-title">'
                 '<span class="material-symbols-outlined">terminal</span>실행 로그'
@@ -89,50 +170,6 @@ def build_reporting_panel(config: dict):
                     '숨기기 (원시 로그)' if log_el.visible else '자세히 보기 (원시 로그)'
                 )
             log_toggle_btn.on_click(_toggle_log)
-
-        # ── 우측: 입력/채팅 ──────────────────────────────────────────────
-        with ui.element('div').style('display:flex; flex-direction:column;'):
-            ui.html(
-                '<div class="section-card-title">'
-                '<span class="material-symbols-outlined">edit_note</span>입력 / 채팅'
-                '</div>'
-            )
-
-            hint_label = ui.html(
-                '<div class="muted-text" style="padding:10px 12px;background:var(--bg-elev);'
-                'border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;">'
-                '왼쪽에서 보고서를 선택하세요.</div>'
-            )
-
-            # 단순 보고서용 진행 요약 바 — FX5260 등 다단계(wizard) 보고서는
-            # 자체 스텝퍼가 이미 진행 상태를 보여주므로 여기서는 표시하지 않는다.
-            progress_summary_el = ui.html('')
-
-            upload_area = ui.column().classes('w-full')
-            param_area = ui.column().classes('w-full mt-2')
-            fx5260_area = ui.column().classes('w-full mt-2')   # FX5260 변동금리 분석 전용 영역
-
-            checklist_area = ui.html('')
-
-            run_btn = ui.button('실행').classes('btn-primary-mono w-full mt-3')
-            run_btn.visible = False
-
-            # 반복 실행 편의 — 저장된 직전 파라미터가 있을 때만 노출.
-            # 파일은 세션마다 재업로드가 필요하므로 값만 복원한다.
-            restore_btn = ui.button('직전 설정으로 실행').props('outline dense no-caps').classes('w-full mt-2')
-            restore_btn.visible = False
-
-            ui.html(
-                '<div class="muted-label" style="margin-top:16px;">메모 (저장되지 않음 — 세션 내 참고용)</div>'
-            )
-            chat_container = ui.column().classes('w-full').style(
-                'background:var(--bg-elev);border:1px solid var(--border);'
-                'border-radius:var(--radius);height:160px;overflow-y:auto;'
-                'padding:8px;display:flex;flex-direction:column;gap:6px;'
-            )
-            with ui.row().classes('w-full gap-2 mt-2 no-wrap'):
-                chat_input = ui.input(placeholder='메모 입력 (저장되지 않음)...').props('outlined dense').classes('flex-1')
-                send_btn = ui.button('전송').classes('btn-primary-mono')
 
     # ─── 이벤트 / 헬퍼 ───────────────────────────────────────────────────
 
@@ -206,35 +243,201 @@ def build_reporting_panel(config: dict):
         month_sel.on('update:model-value', lambda _e: _refresh_checklist())
         return adapter
 
-    def add_chat_message(role: str, content: str):
-        state['chat_messages'].append({'role': role, 'content': content})
-        safe = _html.escape(content).replace('\n', '<br>')
-        if role == 'user':
-            bubble = (
-                f'<div style="align-self:flex-end;max-width:85%;'
-                f'background:var(--accent);color:#fff;border-radius:'
-                f'{6 if True else 0}px 6px 2px 6px;padding:7px 11px;font-size:12.5px;'
-                f'line-height:1.55;">{safe}</div>'
-            )
-        else:
-            bubble = (
-                f'<div style="align-self:flex-start;max-width:90%;'
-                f'background:var(--bg);color:var(--text-2);border:1px solid var(--border);'
-                f'border-radius:6px 6px 6px 2px;padding:7px 11px;font-size:12.5px;'
-                f'line-height:1.55;">{safe}</div>'
-            )
-        with chat_container:
-            ui.html(bubble)
+    # ── AI 어시스턴트 채팅 ────────────────────────────────────────────────
+    # QA 패널(app.py _build_qa_panel)과 동일한 chat-wrap/msg 마크업·스트리밍
+    # 패턴을 재사용한다. 다만 참고 문서 대신 [보고서 카탈로그]+[현재 상태]를
+    # 컨텍스트로 주입해, 보고서 작성 방식·진행 상태·직전 실행 결과에 대한
+    # 질의에 답할 수 있게 한다.
+    assistant_chat: list[dict] = []
 
-    def send_chat():
-        msg = (chat_input.value or '').strip()
-        if not msg:
+    def _msg_html(role: str, content: str, with_cursor: bool = False) -> str:
+        is_user = (role == 'user')
+        cls = 'msg user' if is_user else 'msg ai'
+        avatar = '나' if is_user else 'AI'
+        label = '사용자' if is_user else '어시스턴트'
+        body = _html.escape(content).replace('\n', '<br>') if content else ''
+        cursor = '<span class="chat-cursor"></span>' if with_cursor else ''
+        return (
+            f'<div class="{cls}">'
+            f'<div class="msg-role"><span class="avatar">{avatar}</span><span>{label}</span></div>'
+            f'<div class="msg-body">{body}{cursor}</div>'
+            f'</div>'
+        )
+
+    def _show_chat_empty(visible: bool):
+        chat_empty_el.style(f'display:{"flex" if visible else "none"};')
+        chat_scroll_el.style(f'display:{"none" if visible else "block"};')
+
+    def _scroll_chat_to_bottom():
+        with chat_inner_el:
+            ui.run_javascript(
+                'document.querySelectorAll(".chat-scroll").forEach('
+                's => { s.scrollTop = s.scrollHeight; });'
+            )
+
+    def _render_assistant_chat():
+        chat_inner_el.clear()
+        if not assistant_chat:
+            _show_chat_empty(True)
             return
-        chat_input.value = ''
-        add_chat_message('user', msg)
+        _show_chat_empty(False)
+        with chat_inner_el:
+            for msg in assistant_chat:
+                ui.html(_msg_html(msg['role'], msg['content']))
+        _scroll_chat_to_bottom()
 
-    send_btn.on_click(send_chat)
-    chat_input.on('keydown.enter', lambda _e=None: send_chat())
+    def _report_catalog_text() -> str:
+        lines = []
+        for cfg in REPORT_CONFIGS.values():
+            files = ', '.join(f['label'] for f in cfg['files']) or '없음'
+            params = ', '.join(p['label'] for p in cfg['params']) or '없음'
+            lines.append(f"- {cfg['name']}: {cfg['description']} | 필요 파일: {files} | 파라미터: {params}")
+        return '\n'.join(lines)
+
+    def _current_context_text() -> str:
+        report_key = state.get('selected')
+        if not report_key:
+            return '(아직 보고서를 선택하지 않음)'
+        cfg = REPORT_CONFIGS[report_key]
+        uploaded = ', '.join(
+            f_def['label'] for f_def in cfg['files'] if f_def['key'] in state['uploaded_files']
+        ) or '없음'
+        missing = ', '.join(
+            f_def['label'] for f_def in cfg['files'] if f_def['key'] not in state['uploaded_files']
+        ) or '없음'
+        params_filled = ', '.join(
+            f"{p_def['label']}={param_inputs[p_def['key']].value}"
+            for p_def in cfg['params']
+            if param_inputs.get(p_def['key']) and (param_inputs[p_def['key']].value or '').strip()
+        ) or '없음'
+        recent_hist = [
+            f"{it['title']} ({it['badge_label']})"
+            for it in activity_log.recent(20)
+            if it['sub'].startswith('보고서 작성')
+        ][:5]
+        hist_block = '\n'.join(recent_hist) if recent_hist else '없음'
+        last_log = (state.get('last_log_text') or '').strip()
+        return (
+            f"선택된 보고서: {cfg['name']}\n"
+            f"업로드 완료된 파일: {uploaded}\n"
+            f"미업로드 파일: {missing}\n"
+            f"입력된 파라미터: {params_filled}\n"
+            f"최근 보고서 실행 이력:\n{hist_block}\n"
+            f"직전 실행 로그(최대 1000자):\n{last_log[:1000] if last_log else '(아직 실행 이력 없음)'}"
+        )
+
+    _assistant_busy = {'v': False}
+
+    def _set_assistant_busy(busy: bool):
+        _assistant_busy['v'] = busy
+        try:
+            if busy:
+                assistant_send_btn.props('disabled')
+                assistant_send_btn.classes(add='is-disabled')
+            else:
+                assistant_send_btn.props(remove='disabled')
+                assistant_send_btn.classes(remove='is-disabled')
+        except Exception:
+            pass
+
+    async def send_assistant_message():
+        if not llm_status.guard():
+            return
+        if _assistant_busy['v']:
+            return
+        q = (assistant_input.value or '').strip()
+        if not q:
+            return
+        _set_assistant_busy(True)
+        assistant_input.value = ''
+        try:
+            await _do_send_assistant(q)
+        finally:
+            _set_assistant_busy(False)
+            assistant_input.value = ''
+
+    async def _do_send_assistant(q: str):
+        assistant_chat.append({'role': 'user', 'content': q})
+        _show_chat_empty(False)
+        with chat_inner_el:
+            ui.html(_msg_html('user', q))
+            stream_bubble = ui.html(_msg_html('assistant', '', with_cursor=True))
+
+        try:
+            history_lines = []
+            for m in assistant_chat[:-1]:
+                role = '사용자' if m['role'] == 'user' else 'AI'
+                history_lines.append(f'{role}: {m["content"]}')
+            history_block = '\n'.join(history_lines) if history_lines else '(없음)'
+
+            system_prompt = (
+                '당신은 사내 보고서 자동화 플랫폼의 보고서 작성 도우미입니다. '
+                '사용자가 각 보고서의 작성 방법·필요한 파일·파라미터, 현재 진행 상태, '
+                '직전 실행 결과나 오류의 원인을 물으면 아래 [보고서 카탈로그]와 '
+                '[현재 상태]에 근거해 한국어로 간결하게 답변하세요. '
+                '근거로 확인할 수 없는 내용은 추측하지 말고 모른다고 답하세요.'
+            )
+            if app_state.get('persona_block'):
+                system_prompt += '\n\n' + app_state['persona_block']
+
+            user_prompt = (
+                f'[보고서 카탈로그]\n{_report_catalog_text()}\n\n'
+                f'[현재 상태]\n{_current_context_text()}\n\n'
+                f'[이전 대화]\n{history_block}\n\n'
+                f'[사용자 질문]\n{q}'
+            )
+
+            from langchain_core.messages import SystemMessage, HumanMessage
+            llm = create_llm_fn(model_id=app_state.get('selected_model_id'))
+            reply_parts: list[str] = []
+
+            try:
+                async for chunk in llm.astream([
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_prompt),
+                ]):
+                    token = getattr(chunk, 'content', None)
+                    if token:
+                        reply_parts.append(token)
+                        stream_bubble.content = _msg_html(
+                            'assistant', ''.join(reply_parts), with_cursor=True
+                        )
+                        await asyncio.sleep(0)
+                answer = ''.join(reply_parts)
+            except Exception:
+                def _sync_invoke():
+                    resp = llm.invoke([
+                        SystemMessage(content=system_prompt),
+                        HumanMessage(content=user_prompt),
+                    ])
+                    return getattr(resp, 'content', None) or str(resp)
+                answer = await nicegui_run.io_bound(_sync_invoke)
+
+            final = answer or '(빈 응답)'
+            stream_bubble.content = _msg_html('assistant', final)
+            assistant_chat.append({'role': 'assistant', 'content': final})
+            _scroll_chat_to_bottom()
+        except Exception as e:
+            err = f'답변 생성 중 오류가 발생했습니다: {e}'
+            stream_bubble.content = _msg_html('assistant', err)
+            assistant_chat.append({'role': 'assistant', 'content': err})
+
+    async def clear_assistant_chat():
+        assistant_chat.clear()
+        _render_assistant_chat()
+
+    assistant_send_btn.on('click', lambda _e: asyncio.create_task(send_assistant_message()))
+    assistant_clear_btn.on('click', lambda _e: asyncio.create_task(clear_assistant_chat()))
+    if not llm_status.is_available():
+        assistant_send_btn.props('disabled')
+        assistant_send_btn.classes(add='is-disabled')
+
+    def _on_assistant_enter(_e):
+        args = _e.args if isinstance(_e.args, dict) else {}
+        if args.get('shiftKey') or args.get('isComposing'):
+            return  # 줄바꿈 / 한글 IME 조합 중
+        asyncio.create_task(send_assistant_message())
+    assistant_input.on('keydown.enter', _on_assistant_enter)
 
     def update_log(text: str):
         escaped = _html.escape(text).replace('\n', '<br>')
@@ -439,7 +642,6 @@ def build_reporting_panel(config: dict):
                         if var_inp:
                             var_inp.value = json.dumps(rates, ensure_ascii=False)
                         fx_step_el.content = step_list_html(_FX5260_STEPS, 3)
-                        add_chat_message('sys', f'변동금리 {len(rates)}건 적용 완료. 이제 [실행]을 누르세요.')
                         ui.notify('변동금리가 적용되었습니다. [실행]으로 보고서를 생성하세요.',
                                   type='positive', position='top')
 
@@ -450,11 +652,6 @@ def build_reporting_panel(config: dict):
     async def select_report(key: str):
         state['selected'] = key
         state['output_files'].clear()
-
-        # 보고서 전환 시 이전 보고서의 채팅·안내 메시지를 초기화
-        # (FX5260 등 특정 보고서 전용 안내가 다른 탭에 잔류하지 않도록)
-        state['chat_messages'].clear()
-        chat_container.clear()
 
         for k, btn in report_btns.items():
             btn.classes(remove='active')
@@ -482,12 +679,6 @@ def build_reporting_panel(config: dict):
         log_el.visible = False
         log_toggle_btn.text = '자세히 보기 (원시 로그)'
         _refresh_checklist()
-
-        if key == 'fx5260':
-            add_chat_message(
-                'sys',
-                "FX5260: CRMS·SEQ 업로드와 기준년월 입력 후 [변동금리 분석]으로 금리 입력 계좌를 확인하세요.",
-            )
 
     for key in REPORT_CONFIGS:
         report_btns[key].on('click', lambda _e, k=key: asyncio.create_task(select_report(k)))
@@ -534,7 +725,6 @@ def build_reporting_panel(config: dict):
         update_log(f"[{cfg['name']}] 실행 중...\n")
         log_el.visible = False
         log_toggle_btn.text = '자세히 보기 (원시 로그)'
-        add_chat_message('sys', f"{cfg['name']} 실행 시작")
 
         try:
             ok, log_text, outputs = await nicegui_run.io_bound(
@@ -547,6 +737,7 @@ def build_reporting_panel(config: dict):
 
         update_log(log_text)
         state['output_files'] = outputs
+        state['last_log_text'] = log_text
 
         # 입력 파일 삭제 (출력 파일은 다운로드를 위해 유지)
         output_set = set(outputs)
@@ -563,7 +754,6 @@ def build_reporting_panel(config: dict):
             saved_vals = {pkey: (inp.value or '') for pkey, inp in param_inputs.items()}
             _save_params_for(report_key, saved_vals)
             restore_btn.visible = True
-            add_chat_message('sys', f"{cfg['name']} 완료! 아래 다운로드 버튼을 이용하세요.")
             with download_area:
                 ui.html('<div class="muted-label">다운로드</div>')
                 for out_path in outputs:
@@ -581,7 +771,6 @@ def build_reporting_panel(config: dict):
             # 오류 시에는 원인 파악을 위해 클릭 없이 원시 로그를 바로 펼친다.
             log_el.visible = True
             log_toggle_btn.text = '숨기기 (원시 로그)'
-            add_chat_message('sys', '실행 중 오류가 발생했습니다. 로그를 확인하세요.')
             ui.notify('실행 오류 발생', type='negative', position='top')
             activity_log.record('report', cfg['name'], status='error')
 
@@ -655,3 +844,5 @@ def build_reporting_panel(config: dict):
 
     run_btn.on_click(_confirm_before_run)
     restore_btn.on_click(_run_with_saved)
+
+    _render_assistant_chat()

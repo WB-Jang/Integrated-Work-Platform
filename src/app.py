@@ -2488,7 +2488,7 @@ def main_page(request: Request):
         panels['reporting'] = panel_reporting
         panel_reporting.style('display:none;')
         with panel_reporting:
-            build_reporting_panel(_config)
+            build_reporting_panel(_config, create_llm, state)
 
         # ── 법률 검색 ─────────────────────────────────────────────────────
         panel_legal = ui.element('div').classes('panel')

@@ -916,8 +916,9 @@ select.inp option { background: var(--bg-elev); color: var(--text); }
   overflow-y: auto;
   min-width: 0;
 }
-/* 1280px 이하 — 3열을 세로 스택으로 전환 (목록 → 입력 → 로그 순으로
-   보고서 작성 흐름에 맞춰 재배치. flex order 로 DOM 순서는 유지) */
+/* 1280px 이하 — 3열을 세로 스택으로 전환. DOM 순서(목록 → 업로드/파라미터
+   → AI 어시스턴트/로그)가 이미 보고서 작성 흐름과 일치하므로 별도 재배치 없이
+   그대로 쌓는다. */
 @media (max-width: 1280px) {
   .tri-col-row {
     grid-template-columns: 1fr;
@@ -926,9 +927,6 @@ select.inp option { background: var(--bg-elev); color: var(--text); }
     overflow-y: auto;
   }
   .tri-col-row > div { overflow-y: visible; flex-shrink: 0; }
-  .tri-col-row > div:nth-child(1) { order: 1; }
-  .tri-col-row > div:nth-child(3) { order: 2; }
-  .tri-col-row > div:nth-child(2) { order: 3; }
 }
 
 /* ─────────────────────────────────────────────────────────
