@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main # main 브랜치에 push될 때 작동합니다.
+  workflow_dispatch: # 수동 실행 — Actions 탭에서 원하는 브랜치를 골라 HF Space 에 배포.
+                     # (workflow_dispatch 는 워크플로 파일이 기본 브랜치(main)에 올라간 뒤부터 UI에 노출됩니다.)
 
 jobs:
   sync-to-hub:
@@ -20,4 +22,5 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           git remote add space https://huggingface.co/spaces/eeariorie/Integrated-Work-Platform
-          git push --force https://eeariorie:$HF_TOKEN@huggingface.co/spaces/eeariorie/Integrated-Work-Platform main 
+          # HEAD:main — push 트리거(main)든 수동 dispatch(임의 브랜치)든 현재 체크아웃된 커밋을 HF Space 의 main 으로 배포.
+          git push --force https://eeariorie:$HF_TOKEN@huggingface.co/spaces/eeariorie/Integrated-Work-Platform HEAD:main
