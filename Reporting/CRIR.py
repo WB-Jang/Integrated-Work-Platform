@@ -484,6 +484,39 @@ def generate_crir(raw_path, form_path, output_path,
     return output_path
 
 
+def generate_report(raw, format_file, base_ym, dates, ea_purely, ea_non_purely):
+    """CRIR 보고서 — 표준 generate_report 진입점.
+
+    통합 raw(.xlsx) + 양식(format.xlsx, 'new' 시트) + 기준년월(base_ym, YYYY-MM)
+    + 기간 라벨 4개(dates) + Early Alerts 값(ea_purely/ea_non_purely)을 받아
+    양식을 채워 저장한다. 각 섹션 오류는 generate_crir 내부에서 단계별로 로그에
+    남으며, 최종 파일명/경로는 기존 하드코딩 규칙을 그대로 따른다.
+    """
+    logs = []
+
+    def _log(m):
+        logs.append(str(m))
+
+    try:
+        base_ym = str(base_ym)
+        yyyymm = base_ym.replace('-', '').replace('.', '').replace('/', '')
+        outfile = f"C:/Users/1598505/OneDrive - Standard Chartered Bank/1.보고서(WB)/3.Internal/8.CRIR/{yyyymm}/overview_{yyyymm[2:]}.xlsx"
+        _log(f"[시작] CRIR 보고서 생성 (기준: {base_ym})")
+        generate_crir(
+            raw_path=raw, form_path=format_file, output_path=outfile,
+            dates=dates, ea_purely=ea_purely, ea_non_purely=ea_non_purely,
+            base_ym=base_ym, log_fn=_log,
+        )
+    except Exception as e:
+        import traceback
+        _log(f"[ERROR] 'CRIR 보고서 생성' 단계에서 오류: {e}")
+        _log(traceback.format_exc())
+        return {'ok': False, 'log': "\n".join(logs), 'outfile': None}
+
+    _log(f"[완료] CRIR 보고서 작성 완료: {outfile}")
+    return {'ok': True, 'log': "\n".join(logs), 'outfile': outfile}
+
+
 if __name__ == '__main__':
     # 로컬 단독 실행용 예시 (실제 경로/파라미터로 교체해 사용)
     import sys

@@ -1,60 +1,64 @@
 """
 보고서 작성 러너 모듈
 각 보고서 스크립트의 설정 및 실행 로직을 관리합니다.
+
+모든 보고서는 Reporting/ 하위의 최상위 ``generate_report(...)`` 를 in-process 로
+호출하며, 각 함수는 ``{'ok': bool, 'log': str, 'outfile': path[, 'outfiles': list]}``
+형태의 dict 를 반환한다. (FX5260 은 변동금리 대화형 처리 특성상 러너 내부에서
+직접 처리한다.)
 """
 import os
 import sys
 import uuid
-import subprocess
 import json
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.parent
 REPORTING_DIR = (BASE_DIR / "Reporting").resolve()
 
+# Reporting/ 를 sys.path 에 추가해 각 러너에서 `from <스크립트> import generate_report`
+# 형태로 in-process 호출할 수 있게 한다. (실제 import 는 각 러너 함수 내부에서 지연 수행)
+if str(REPORTING_DIR) not in sys.path:
+    sys.path.insert(0, str(REPORTING_DIR))
+
 REPORT_CONFIGS = {
     "bok_dlnq": {
         "name": "BOK 10일 연체 보고서",
-        "description": "BOK 제출용 10일 기준 연체 현황 보고서",
+        "description": "통합 raw + 양식(format)을 받아 '보고서1'/'보고서2' 시트를 채워 저장",
         "icon": "📋",
         "files": [
-            {"key": "bf_15", "label": "이전 기준일 15번쿼리 CSV", "hint": "인코딩: euc-kr"},
-            {"key": "cur_15", "label": "이번 기준일 15번쿼리 CSV", "hint": "인코딩: euc-kr"},
-            {"key": "cur_17", "label": "이번 기준일 17번쿼리 CSV", "hint": "인코딩: euc-kr"},
+            {"key": "raw", "label": "통합 raw.xlsx (시트: bf_15/cur_15/cur_17)", "hint": "복호화 필수"},
+            {"key": "format", "label": "양식 format.xlsx (보고서1/보고서2)", "hint": "복호화 필수"},
         ],
         "params": [
+            {"key": "base_yymmdd", "label": "작성기준일 (yymmdd, 예: 260430)", "type": "str"},
             {"key": "mortgage_loan", "label": "주택담보대출 금액 (억원, 예: 1234.56)", "type": "float"},
         ],
-        "outputs": ["BOK_보고서1.csv", "BOK_보고서2.csv"],
         "runner": "bok_dlnq",
     },
     "fx5220_1st": {
         "name": "FX5220 보고서 (1차)",
-        "description": "외화여신 FX5220 1차 - 신규 외화여신 현황",
+        "description": "외화여신 FX5220 1차 - 신규 외화여신 현황 (Outlook 자료요청 메일 포함)",
         "icon": "💱",
         "files": [
-            {"key": "current", "label": "이번 기준년월 CSV", "hint": "인코딩: euc-kr"},
-            {"key": "previous", "label": "이전 기준년월 CSV", "hint": "인코딩: utf-8"},
+            {"key": "raw", "label": "통합 raw.xlsx (시트: cur_raw/bf_rm_info)", "hint": "복호화 필수"},
         ],
         "params": [
             {"key": "dt", "label": "기준 날짜 (yyyymmdd, 예: 20260201)", "type": "str"},
         ],
-        "outputs": ["FX5220_신규여신.csv"],
         "runner": "fx5220_1st",
     },
     "fx5220_2nd": {
         "name": "FX5220 보고서 (2차)",
-        "description": "외화여신 FX5220 2차 - RM 정보 추가 및 피벗 테이블 작성",
+        "description": "외화여신 FX5220 2차 - RM 정보 추가 및 양식 '입력표' 피벗 기입",
         "icon": "💱",
         "files": [
-            {"key": "current", "label": "이번 기준년월 CSV", "hint": "인코딩: utf-8"},
-            {"key": "previous", "label": "이전 기준년월 CSV", "hint": "인코딩: utf-8"},
-            {"key": "rm_response", "label": "신규 외화여신 RM 회신 CSV", "hint": "인코딩: utf-8"},
+            {"key": "raw", "label": "통합 raw.xlsx (cur_raw/bf_rm_info/cur_response)", "hint": "복호화 필수"},
+            {"key": "format", "label": "양식 format.xlsx (입력표)", "hint": "복호화 필수"},
         ],
         "params": [
             {"key": "dt", "label": "기준 날짜 (yyyymmdd, 예: 20260201)", "type": "str"},
         ],
-        "outputs": ["FX5220_rm_info.csv"],
         "runner": "fx5220_2nd",
     },
     "fx5260": {
@@ -85,70 +89,62 @@ REPORT_CONFIGS = {
     },
     "fss_dlnq": {
         "name": "FSS 연체 보고서",
-        "description": "금융감독원 제출용 연체 현황 보고서",
+        "description": "통합 raw + 양식(format)을 받아 '(붙임1) 요약'·'(붙임2) 업종별 현황' 기입",
         "icon": "📊",
         "files": [
-            {"key": "file1", "label": "1번 쿼리 결과 CSV", "hint": "인코딩: euc-kr"},
-            {"key": "file2", "label": "2번 쿼리 결과 CSV", "hint": "인코딩: euc-kr"},
+            {"key": "raw", "label": "통합 raw.xlsx (dlnq_sts_dtl_1/2)", "hint": "복호화 필수"},
+            {"key": "format", "label": "양식 format.xlsx (붙임1/붙임2)", "hint": "복호화 필수"},
         ],
-        "params": [],
-        "outputs": ["FSS_연체보고서1.csv", "FSS_연체보고서2.csv"],
+        "params": [
+            {"key": "yymmdd", "label": "기준 날짜 (yymmdd, 예: 260210)", "type": "str"},
+        ],
         "runner": "fss_dlnq",
     },
     "corp_loan": {
         "name": "기업 여신 조사표",
-        "description": "한국은행 기업 여신 현황 조사표 (FS_00401, FS_00409)",
+        "description": "통합 raw + 양식(format)을 받아 FS00401/00402/00409/00410 시트 기입",
         "icon": "🏢",
         "files": [
-            {"key": "fs_00401", "label": "이번 기준년월 FS_00401 CSV", "hint": "인코딩: euc-kr"},
-            {"key": "bf_fs_00401", "label": "이전 기준년월 FS_00401 CSV", "hint": "인코딩: euc-kr"},
-            {"key": "fs_00409", "label": "이번 기준년월 FS_00409 CSV", "hint": "인코딩: euc-kr"},
+            {"key": "raw", "label": "통합 raw.xlsx (fs_00401/409/410 + 원화대출금_FS00402)", "hint": "복호화 필수"},
+            {"key": "format", "label": "양식 format.xlsx (FS00401~00410)", "hint": "복호화 필수"},
         ],
-        "params": [],
-        "outputs": ["fs_00401_result.csv", "fs_00409_result.csv"],
+        "params": [
+            {"key": "dt", "label": "기준년월", "type": "yymm", "format": "YYYYMM"},
+        ],
         "runner": "corp_loan",
     },
     "bok_statistical": {
         "name": "BOK 통화금융통계 조사표",
-        "description": "한국은행 통화금융통계 월여신 조사표",
+        "description": "한국은행 통화금융통계 월여신 조사표 (그룹별 결과 CSV 저장)",
         "icon": "📈",
         "files": [
-            {"key": "monthly_loan", "label": "월여신 CSV (01_월여신_137,148)", "hint": "인코딩: euc-kr"},
-            {"key": "seq", "label": "SEQ CSV (seq_137_148)", "hint": "인코딩: euc-kr"},
-            {"key": "related", "label": "관계사 CSV (related_companies)", "hint": "인코딩: cp949"},
-            {"key": "classification", "label": "분류 CSV (classification)", "hint": "인코딩: euc-kr"},
+            {"key": "raw", "label": "통합 raw.xlsx (월여신 다중 시트)", "hint": "시트: 01_월여신_*"},
         ],
         "params": [
-            {"key": "yymm", "label": "기준년월", "type": "yymm", "format": "YYMM"},
+            {"key": "yyyymm", "label": "기준년월", "type": "yymm", "format": "YYYYMM"},
         ],
-        "outputs": ["BOK_통계조사표_결과.csv"],
         "runner": "bok_statistical",
     },
     "local_rir": {
         "name": "Local RIR",
-        "description": "내부 리스크 정보 보고서 (Local Risk Information Reporting)",
+        "description": "내부 리스크 정보 보고서 - 결과 6종을 단일 integrated_result.xlsx 로 저장",
         "icon": "⚠️",
         "files": [
-            {"key": "cg2_excl", "label": "CG2 제외 데이터 CSV", "hint": "인코딩: euc-kr"},
-            {"key": "portfolio", "label": "포트폴리오 데이터 CSV", "hint": "인코딩: euc-kr"},
-            {"key": "product_map", "label": "상품 매핑 CSV", "hint": "인코딩: utf-8-sig"},
-            {"key": "product_bc_retail", "label": "Product BC Retail CSV", "hint": "인코딩: euc-kr"},
+            {"key": "raw", "label": "통합 raw.xlsx (LRIR 다중 시트)", "hint": "복호화 필수"},
         ],
         "params": [
-            {"key": "bfyymm", "label": "이전 기준년월", "type": "yymm", "format": "YYMM"},
-            {"key": "yymm", "label": "이번 기준년월", "type": "yymm", "format": "YYMM"},
+            {"key": "yyyymm", "label": "기준년월", "type": "yymm", "format": "YYYYMM"},
         ],
-        "outputs": ["LocalRIR_결과.csv"],
         "runner": "local_rir",
     },
     "crir": {
         "name": "CRIR 보고서",
-        "description": "거래상대방 리스크 정보 보고서 (raw 엑셀 다중시트 → 폼 템플릿 자동 기입)",
+        "description": "거래상대방 리스크 정보 보고서 (raw 엑셀 다중시트 → 양식 'new' 자동 기입)",
         "icon": "📋",
         "mode": "form_fill",
         "files": [
-            {"key": "raw_data", "label": "CRIR raw_data.xlsx (다중 시트)", "hint": "시트: Sheet2 등"},
-            {"key": "form", "label": "보고서 폼 템플릿 .xlsx", "hint": "결과가 채워질 양식 (워크시트 'new')"},
+            {"key": "raw", "label": "CRIR raw_data.xlsx (다중 시트)", "hint": "시트: Sheet2 등"},
+            {"key": "format", "label": "양식 format.xlsx (워크시트 'new')", "hint": "결과가 채워질 양식"},
         ],
         "params": [
             {"key": "base_ym", "label": "기준년월", "type": "yymm", "format": "YYYY-MM"},
@@ -160,15 +156,14 @@ REPORT_CONFIGS = {
              "label": "EA non-purely USDm 4개 (공백)",
              "type": "str", "optional": True, "hint": "CRC 전달값, 공백 구분 정수 4개"},
         ],
-        "outputs": ["CRIR_보고서_filled.xlsx"],
         "runner": "crir",
     },
     "risk_limit": {
         "name": "리스크 한도 모니터링",
-        "description": "리스크 한도 준수 현황 모니터링 보고서",
+        "description": "원시/KSIC/주채무그룹 CSV + Total EAD 로 EAD 배분 결과 CSV 저장",
         "icon": "🎯",
         "files": [
-            {"key": "raw_data", "label": "원시 데이터 CSV", "hint": "인코딩: euc-kr"},
+            {"key": "raw", "label": "원시 데이터 CSV", "hint": "인코딩: euc-kr"},
             {"key": "ksic", "label": "KSIC 코드 CSV", "hint": "인코딩: utf-8-sig"},
             {"key": "main_debt_group", "label": "주채무그룹 CSV", "hint": "인코딩: utf-8-sig"},
         ],
@@ -176,8 +171,20 @@ REPORT_CONFIGS = {
             {"key": "yymm", "label": "기준년월", "type": "yymm", "format": "YYMM"},
             {"key": "total_ead", "label": "Total EAD (예: 17687118)", "type": "float"},
         ],
-        "outputs": ["RiskLimit_결과.csv"],
         "runner": "risk_limit",
+    },
+    "b2419": {
+        "name": "거액 신규 여신 보고서",
+        "description": "거액 신규 여신 보고서(건당 50억 이상 신규분, Outlook 회신요청/전결권자 확인 메일 포함)",
+        "icon": "🎯",
+        "files": [
+            {"key": "raw", "label": "통합 raw.xlsx (B2419result/report_seq)", "hint": "List + Seq"},
+        ],
+        "params": [
+            {"key": "yyyymm", "label": "기준년월", "type": "yymm", "format": "YYYYMM"},
+            {"key": "end_dt", "label": "기한 (예: 5/14(목))", "type": "str"},
+        ],
+        "runner": "b2419",
     },
 }
 
@@ -190,54 +197,31 @@ def get_upload_dir(report_key: str) -> Path:
     return d
 
 
-def _build_stdin(lines: list) -> str:
-    return "\n".join(str(line) for line in lines) + "\n"
+def _unwrap(result: dict):
+    """generate_report 반환 dict → (ok, log_text, output_file_paths) 로 변환.
 
-
-def _subprocess_env() -> dict:
-    """자식 프로세스가 UTF-8로 stdin/stdout을 처리하도록 환경변수를 설정합니다."""
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["PYTHONUTF8"] = "1"
-    return env
-
-
-def run_subprocess_script(script_path: Path, stdin_lines: list, log_callback=None) -> tuple[bool, str]:
+    반환 dict 은 항상 'ok'/'log' 를 가지며, 'outfiles'(list) 또는 'outfile'(단일)로
+    산출물을 전달한다. log 가 예외 객체 등 비문자열이어도 안전하게 문자열화한다.
     """
-    지정된 스크립트를 subprocess로 실행합니다.
-    Returns: (success, output_log)
-    """
-    stdin_text = _build_stdin(stdin_lines)
-    try:
-        result = subprocess.run(
-            [sys.executable, "-u", str(script_path)],
-            input=stdin_text,
-            capture_output=True,
-            text=True,
-            cwd=str(REPORTING_DIR),
-            timeout=300,
-            encoding="utf-8",
-            errors="replace",
-            env=_subprocess_env(),
-        )
-        log = result.stdout
-        if result.returncode != 0:
-            log += f"\n[ERROR]\n{result.stderr}"
-            return False, log
-        return True, log
-    except subprocess.TimeoutExpired:
-        return False, "[ERROR] 실행 시간 초과 (300초)"
-    except Exception as e:
-        return False, f"[ERROR] 실행 실패: {e}"
+    ok = bool(result.get('ok', False))
+    log = result.get('log', '')
+    if not isinstance(log, str):
+        log = str(log)
+    outputs = result.get('outfiles')
+    if not outputs:
+        single = result.get('outfile')
+        outputs = [single] if single else []
+    outputs = [str(p) for p in outputs if p]
+    return ok, log, outputs
 
 
-def run_report(report_key: str, file_paths: dict, params: dict, log_callback=None) -> tuple[bool, str, list]:
+def run_report(report_key: str, file_paths: dict, params: dict, log_callback=None) -> tuple:
     """
     보고서를 실행합니다.
 
     Args:
         report_key: REPORT_CONFIGS의 키
-        file_paths: {"file_key": "/path/to/uploaded/file.csv", ...}
+        file_paths: {"file_key": "/path/to/uploaded/file", ...}
         params: {"param_key": value, ...}
         log_callback: 로그 메시지 콜백 (선택)
 
@@ -255,90 +239,108 @@ def run_report(report_key: str, file_paths: dict, params: dict, log_callback=Non
         "local_rir": _run_local_rir,
         "crir": _run_crir,
         "risk_limit": _run_risk_limit,
+        "b2419": _run_b2419,
     }
     runner = runner_map.get(report_key)
     if not runner:
         return False, f"[ERROR] 알 수 없는 보고서: {report_key}", []
     try:
         return runner(file_paths, params, log_callback)
-    except Exception as e:
+    except Exception:
         import traceback
-        return False, f"[ERROR] 예외 발생:\n{traceback.format_exc()}", []
+        return False, f"[ERROR] 러너 예외 발생:\n{traceback.format_exc()}", []
 
 
-# ─── 개별 러너 함수들 ─────────────────────────────────────────
+# ─── 개별 러너 함수들 (모두 Reporting/ 의 generate_report 를 in-process 호출) ───
 
 def _run_bok_dlnq(file_paths, params, log_callback):
-    upload_dir = Path(file_paths["bf_15"]).parent
-    bf_15 = Path(file_paths["bf_15"])
-    cur_15 = Path(file_paths["cur_15"])
-    cur_17 = Path(file_paths["cur_17"])
-    mortgage_loan = params["mortgage_loan"]
-    out1 = "BOK_보고서1.csv"
-    out2 = "BOK_보고서2.csv"
-    stdin_lines = [
-        str(mortgage_loan),
-        str(upload_dir),
-        f"/{bf_15.name}",
-        str(upload_dir),
-        f"/{cur_15.name}",
-        f"/{cur_17.name}",
-        f"/{out1}",
-        f"/{out2}",
-    ]
-    script = REPORTING_DIR / "BOK_DLNQ_10days_make.py"
-    ok, log = run_subprocess_script(script, stdin_lines, log_callback)
-    outputs = [str(upload_dir / out1), str(upload_dir / out2)] if ok else []
-    return ok, log, outputs
+    from BOK_DLNQ_10days_make import generate_report
+    return _unwrap(generate_report(
+        file_paths["raw"], file_paths["format"],
+        params["base_yymmdd"], params["mortgage_loan"],
+    ))
 
 
 def _run_fx5220_1st(file_paths, params, log_callback):
-    upload_dir = Path(file_paths["current"]).parent
-    current = Path(file_paths["current"])
-    previous = Path(file_paths["previous"])
-    dt = params["dt"]
-    out_file = "FX5220_신규여신.csv"
-    stdin_lines = [
-        str(dt),
-        str(upload_dir),
-        f"/{current.name}",
-        str(upload_dir),
-        f"/{previous.name}",
-        str(upload_dir),
-        f"/{out_file}",
-    ]
-    script = REPORTING_DIR / "FX5220_make_1st.py"
-    ok, log = run_subprocess_script(script, stdin_lines, log_callback)
-    outputs = [str(upload_dir / out_file)] if ok else []
-    return ok, log, outputs
+    from FX5220_make_1st import generate_report
+    return _unwrap(generate_report(file_paths["raw"], params["dt"]))
 
 
 def _run_fx5220_2nd(file_paths, params, log_callback):
-    upload_dir = Path(file_paths["current"]).parent
-    current = Path(file_paths["current"])
-    previous = Path(file_paths["previous"])
-    rm_response = Path(file_paths["rm_response"])
-    dt = params["dt"]
-    out_file = "FX5220_rm_info.csv"
-    stdin_lines = [
-        str(dt),
-        str(upload_dir),
-        f"/{current.name}",
-        str(upload_dir),
-        f"/{previous.name}",
-        str(upload_dir),
-        f"/{rm_response.name}",
-        str(upload_dir),
-        f"/{out_file}",
-    ]
-    script = REPORTING_DIR / "FX5220_make_2nd.py"
-    ok, log = run_subprocess_script(script, stdin_lines, log_callback)
-    outputs = [str(upload_dir / out_file)] if ok else []
-    return ok, log, outputs
+    from FX5220_make_2nd import generate_report
+    return _unwrap(generate_report(file_paths["raw"], file_paths["format"], params["dt"]))
+
+
+def _run_fss_dlnq(file_paths, params, log_callback):
+    from FSS_dlnq_report_make import generate_report
+    return _unwrap(generate_report(file_paths["raw"], file_paths["format"], params["yymmdd"]))
+
+
+def _run_corp_loan(file_paths, params, log_callback):
+    from CORP_LOAN import generate_report
+    return _unwrap(generate_report(file_paths["raw"], file_paths["format"], params["dt"]))
+
+
+def _run_bok_statistical(file_paths, params, log_callback):
+    from bok_statistical_report import generate_report
+    return _unwrap(generate_report(file_paths["raw"], params["yyyymm"]))
+
+
+def _run_local_rir(file_paths, params, log_callback):
+    from Local_RIR import generate_report
+    return _unwrap(generate_report(file_paths["raw"], params["yyyymm"]))
+
+
+def _run_b2419(file_paths, params, log_callback):
+    from B2419_make import generate_report
+    return _unwrap(generate_report(file_paths["raw"], params["yyyymm"], params["end_dt"]))
+
+
+def _run_risk_limit(file_paths, params, log_callback):
+    from Risk_limit_monitoring import generate_report
+    return _unwrap(generate_report(
+        file_paths["raw"], file_paths["ksic"], file_paths["main_debt_group"],
+        params["total_ead"], params["yymm"],
+    ))
+
+
+def _parse_ea(s):
+    """Early Alerts 문자열(공백 구분 정수 4개) → 정수 리스트 4개."""
+    s = (s or "").strip()
+    if not s:
+        return [0, 0, 0, 0]
+    vals = list(map(int, s.split()))
+    return (vals + [0, 0, 0, 0])[:4]
+
+
+def _run_crir(file_paths, params, log_callback):
+    from CRIR import generate_report
+
+    base_ym = (params.get("base_ym") or "").strip()
+    dates = [d.strip() for d in (params.get("dates") or "").split(",") if d.strip()]
+    if len(dates) != 4:
+        return False, (
+            f"[ERROR] 기간 라벨은 4개여야 합니다 (입력: {len(dates)}개). "
+            "예: Apr25,Jan26,Mar26,Apr26"
+        ), []
+    try:
+        ea_purely = _parse_ea(params.get("ea_purely"))
+        ea_non_purely = _parse_ea(params.get("ea_non_purely"))
+    except ValueError:
+        return False, "[ERROR] Early Alerts 값은 공백으로 구분된 정수여야 합니다.", []
+
+    return _unwrap(generate_report(
+        file_paths["raw"], file_paths["format"], base_ym,
+        dates, ea_purely, ea_non_purely,
+    ))
 
 
 def _run_fx5260(file_paths, params, log_callback):
-    """FX5260 - 변동금리 계좌 처리가 필요한 복잡 스크립트"""
+    """FX5260 - 변동금리 계좌 처리가 필요한 복잡 스크립트 (러너 내부에서 직접 처리).
+
+    (변동금리 금리를 var_rates_json 파라미터로 비대화형 처리하기 위해 다른 보고서와
+    달리 러너 내부에 인라인 구현을 유지한다.)
+    """
     import pandas as pd
     from datetime import datetime
 
@@ -457,256 +459,6 @@ def _run_fx5260(file_paths, params, log_callback):
         out_path = upload_dir / "FX5260_최종보고서.csv"
         final_report.to_csv(str(out_path), encoding="utf-8-sig", quoting=1, index=False)
         log += f"[INFO] 보고서 저장 완료: {out_path.name}\n"
-        return True, log, [str(out_path)]
-
-    except Exception as e:
-        import traceback
-        return False, f"[ERROR] 처리 중 오류:\n{traceback.format_exc()}", []
-
-
-def _run_fss_dlnq(file_paths, params, log_callback):
-    upload_dir = Path(file_paths["file1"]).parent
-    file1 = Path(file_paths["file1"])
-    file2 = Path(file_paths["file2"])
-    out1 = "FSS_연체보고서1.csv"
-    out2 = "FSS_연체보고서2.csv"
-    stdin_lines = [
-        str(upload_dir),
-        f"/{file1.name}",
-        f"/{file2.name}",
-        str(upload_dir),
-        f"/{out1}",
-        f"/{out2}",
-    ]
-    script = REPORTING_DIR / "FSS_dlnq_report_make.py"
-    ok, log = run_subprocess_script(script, stdin_lines, log_callback)
-    outputs = [str(upload_dir / out1), str(upload_dir / out2)] if ok else []
-    return ok, log, outputs
-
-
-def _run_corp_loan(file_paths, params, log_callback):
-    upload_dir = Path(file_paths["fs_00401"]).parent
-    fs_00401 = Path(file_paths["fs_00401"])
-    bf_fs_00401 = Path(file_paths["bf_fs_00401"])
-    fs_00409 = Path(file_paths["fs_00409"])
-    stdin_lines = [
-        str(upload_dir),
-        f"/{fs_00401.name}",
-        f"/{bf_fs_00401.name}",
-        f"/{fs_00409.name}",
-    ]
-    cmd = (
-        f"import sys; sys.path.insert(0, r'{REPORTING_DIR}'); "
-        f"from CORP_LOAN import generate_report; generate_report()"
-    )
-    stdin_text = _build_stdin(stdin_lines)
-    try:
-        result = subprocess.run(
-            [sys.executable, "-u", "-c", cmd],
-            input=stdin_text,
-            capture_output=True,
-            text=True,
-            cwd=str(REPORTING_DIR),
-            timeout=300,
-            encoding="utf-8",
-            errors="replace",
-            env=_subprocess_env(),
-        )
-        log = result.stdout
-        if result.returncode != 0:
-            log += f"\n[ERROR]\n{result.stderr}"
-            return False, log, []
-        out1 = str(upload_dir / "fs_00401_result.csv")
-        out2 = str(upload_dir / "fs_00409_result.csv")
-        return True, log, [out1, out2]
-    except Exception as e:
-        return False, f"[ERROR] 실행 실패: {e}", []
-
-
-def _run_bok_statistical(file_paths, params, log_callback):
-    """BOK 통화금융통계 조사표 - 파일 업로드 기반으로 실행"""
-    import pandas as pd
-
-    upload_dir = Path(file_paths["monthly_loan"]).parent
-    yymm = params["yymm"]
-    log = f"[INFO] BOK 통화금융통계 조사표 작성 시작 (기준: {yymm})\n"
-
-    try:
-        cols = ["기준년월", "계좌번호", "계정과목코드", "주민법인번호",
-                "원화환산잔액", "대출평균잔액", "법인구분코드", "기업규모코드"]
-        seq_cols_def = [["계좌번호", "계좌SEQ번호", 5, 6], ["주민법인번호", "주민법인SEQ번호", 6, 7]]
-
-        tmp_137_148 = pd.read_csv(file_paths["monthly_loan"], encoding="euc-kr")
-        seq_137_148 = pd.read_csv(file_paths["seq"], encoding="euc-kr")
-        rel = pd.read_csv(file_paths["related"], encoding="cp949")
-        cls = pd.read_csv(file_paths["classification"], encoding="euc-kr")
-
-        raw_137_148 = pd.concat([tmp_137_148, seq_137_148], axis=1)
-
-        for sq in seq_cols_def:
-            s, q, i, j = sq
-            if s in raw_137_148.columns and q in raw_137_148.columns:
-                raw_137_148[s] = (
-                    raw_137_148[s].astype("string").str[:i]
-                    + raw_137_148[q].astype("string").str.zfill(j)
-                )
-
-        available_cols = [c for c in cols if c in raw_137_148.columns]
-        result = raw_137_148[available_cols]
-
-        out_path = upload_dir / "BOK_통계조사표_결과.csv"
-        result.to_csv(str(out_path), encoding="utf-8-sig", index=False)
-        log += f"[INFO] 기본 처리 완료. 결과 저장: {out_path.name}\n"
-        log += "[INFO] 관계사/분류 데이터 로드 완료. 추가 처리가 필요한 경우 원본 스크립트를 참조하세요.\n"
-        return True, log, [str(out_path)]
-
-    except Exception as e:
-        import traceback
-        return False, f"[ERROR] 처리 중 오류:\n{traceback.format_exc()}", []
-
-
-def _run_local_rir(file_paths, params, log_callback):
-    """Local RIR - 클래스 기반 처리"""
-    import pandas as pd
-    from pandas.api.types import CategoricalDtype
-
-    upload_dir = Path(file_paths["cg2_excl"]).parent
-    bfyymm = params["bfyymm"]
-    yymm = params["yymm"]
-    log = f"[INFO] Local RIR 작성 시작 (기준: {yymm}, 이전: {bfyymm})\n"
-
-    try:
-        raw_cg2_excl = pd.read_csv(file_paths["cg2_excl"], sep=",", encoding="euc-kr")
-        portfolio_data = pd.read_csv(file_paths["portfolio"], sep=",", encoding="euc-kr")
-        product_map = pd.read_csv(file_paths["product_map"], sep=",", encoding="utf-8-sig")
-        product_bc_retail = pd.read_csv(file_paths["product_bc_retail"], sep=",", encoding="euc-kr")
-
-        raw_cg2_excl["base_dt"] = yymm
-
-        cgs = [["01","02","03","04","05"],["06","07","08"],["09","10","11"],["12"],["13","14"]]
-        cg_nms = ["1~5","6~8","9~11","12","13~14"]
-
-        for idx in range(len(raw_cg2_excl)):
-            for i, cg in enumerate(cgs):
-                if str(raw_cg2_excl.loc[idx, "cg"]) in cg:
-                    raw_cg2_excl.loc[idx, "cg_group"] = cg_nms[i]
-
-        raw_cg2_excl["cg_group"] = raw_cg2_excl["cg_group"].fillna("SA, Default(RB)")
-
-        out_path = upload_dir / "LocalRIR_결과.csv"
-        raw_cg2_excl.to_csv(str(out_path), encoding="utf-8-sig", index=False)
-        log += f"[INFO] 기본 처리 완료. 결과 저장: {out_path.name}\n"
-        log += "[INFO] 추가 피벗/집계가 필요한 경우 원본 스크립트를 참조하세요.\n"
-        return True, log, [str(out_path)]
-
-    except Exception as e:
-        import traceback
-        return False, f"[ERROR] 처리 중 오류:\n{traceback.format_exc()}", []
-
-
-def _run_crir(file_paths, params, log_callback):
-    """CRIR - raw 엑셀(다중 시트)을 집계하여 폼 템플릿 셀에 직접 기입 (form_fill 패턴).
-
-    Reporting/CRIR.py 의 generate_crir() 를 호출한다. 다른 보고서도 동일하게
-    '원시 엑셀 + 폼 템플릿 업로드 → 폼을 채워 다운로드' 구조로 확장할 수 있다.
-    """
-    upload_dir = Path(file_paths["raw_data"]).parent
-    raw_path = file_paths["raw_data"]
-    form_path = file_paths.get("form")
-    if not form_path:
-        return False, "[ERROR] 폼 템플릿(.xlsx) 파일을 업로드하세요.", []
-
-    base_ym = (params.get("base_ym") or "").strip()
-    dates = [d.strip() for d in (params.get("dates") or "").split(",") if d.strip()]
-    if len(dates) != 4:
-        return False, (
-            f"[ERROR] 기간 라벨은 4개여야 합니다 (입력: {len(dates)}개). "
-            "예: Apr25,Jan26,Mar26,Apr26"
-        ), []
-
-    def _parse_ea(s):
-        s = (s or "").strip()
-        if not s:
-            return [0, 0, 0, 0]
-        vals = list(map(int, s.split()))
-        return (vals + [0, 0, 0, 0])[:4]
-
-    try:
-        ea_purely = _parse_ea(params.get("ea_purely"))
-        ea_non_purely = _parse_ea(params.get("ea_non_purely"))
-    except ValueError:
-        return False, "[ERROR] Early Alerts 값은 공백으로 구분된 정수여야 합니다.", []
-
-    logs = [f"[INFO] CRIR 보고서 작성 시작 (기준: {base_ym}, 기간: {', '.join(dates)})"]
-
-    def _log(msg):
-        logs.append(str(msg))
-        if log_callback:
-            try:
-                log_callback(str(msg))
-            except Exception:
-                pass
-
-    out_path = upload_dir / "CRIR_보고서_filled.xlsx"
-    try:
-        if str(REPORTING_DIR) not in sys.path:
-            sys.path.insert(0, str(REPORTING_DIR))
-        import importlib
-        import CRIR
-        importlib.reload(CRIR)
-        CRIR.generate_crir(
-            raw_path=raw_path, form_path=form_path, output_path=str(out_path),
-            dates=dates, ea_purely=ea_purely, ea_non_purely=ea_non_purely,
-            base_ym=base_ym, log_fn=_log,
-        )
-        return True, "\n".join(logs), [str(out_path)]
-    except Exception:
-        import traceback
-        return False, "\n".join(logs) + f"\n[ERROR] 처리 중 오류:\n{traceback.format_exc()}", []
-
-
-def _run_risk_limit(file_paths, params, log_callback):
-    """리스크 한도 모니터링 - preprocessing 함수 직접 호출"""
-    import pandas as pd
-    import numpy as np
-    from pandas.api.types import CategoricalDtype
-
-    upload_dir = Path(file_paths["raw_data"]).parent
-    yymm = params["yymm"]
-    total_ead = float(params["total_ead"])
-    log = f"[INFO] 리스크 한도 모니터링 작성 시작 (기준: {yymm}, Total EAD: {total_ead})\n"
-
-    # configs 상수 (인라인)
-    add_cols = ["industry1", "industry2", "group_nm", "final_ead"]
-
-    try:
-        raw = pd.read_csv(file_paths["raw_data"], sep=",", encoding="euc-kr")
-        ksic = pd.read_csv(file_paths["ksic"], sep=",", encoding="utf-8-sig")
-        main_debt_group = pd.read_csv(file_paths["main_debt_group"], sep=",", encoding="utf-8-sig")
-
-        main_debt_group = main_debt_group.drop_duplicates()
-        main_debt_group = main_debt_group.dropna(subset=["SSN_CORP_NUM"])
-        cols = raw.columns
-
-        if add_cols[0] in ksic.columns:
-            ksic[add_cols[0]] = ksic[add_cols[0]].astype("string").str.strip()
-
-        raw[cols[0]] = raw[cols[0]].astype("float")
-        raw[cols[3]] = raw[cols[3]].fillna("K64999")
-        raw[add_cols[0]] = np.where(
-            (raw[cols[0]].astype("string").str[:3] == "400") & (raw[cols[0]].isnull()),
-            np.nan,
-            raw[cols[3]].astype("string").str[:3],
-        )
-        raw[add_cols[0]] = raw[add_cols[0]].astype("string")
-        raw = pd.merge(raw, ksic, how="left", on=add_cols[0])
-        raw = pd.merge(raw, main_debt_group, how="left", on=cols[0])
-        sum_ead = raw[cols[4]].sum()
-        raw[add_cols[3]] = total_ead * (raw[cols[4]] / sum_ead)
-
-        out_path = upload_dir / "RiskLimit_결과.csv"
-        raw.to_csv(str(out_path), encoding="utf-8-sig", index=False)
-        log += f"[INFO] 처리 완료. 결과 저장: {out_path.name}\n"
         return True, log, [str(out_path)]
 
     except Exception as e:
