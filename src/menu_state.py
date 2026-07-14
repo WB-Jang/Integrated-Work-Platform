@@ -16,13 +16,14 @@ MENU_ITEMS: dict[str, str] = {
     'reporting':      '보고서',
     'outlook':        '메일분석',
     'regulatory':     '규제동향',
+    'rates':          '금리모니터',
     'risk_dashboard': 'Risk DashBoard',
     'risk_indicator': 'Risk Indicator Dashboard',
 }
 
 MENU_GROUPS: dict[str, list[str]] = {
     'llm':       ['analysis', 'summary', 'qa', 'legal'],
-    'business':  ['convert', 'reporting', 'outlook', 'regulatory'],
+    'business':  ['convert', 'reporting', 'outlook', 'regulatory', 'rates'],
     'dashboard': ['risk_dashboard', 'risk_indicator'],
 }
 

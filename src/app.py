@@ -72,6 +72,7 @@ from regulatory_panel import build_regulatory_panel
 from admin_panel import build_admin_panel
 from fss_dashboard_panel import build_fss_dashboard_panel
 from risk_indicator_panel import build_risk_indicator_panel
+from rates_panel import build_rates_panel
 from agent_console import build_agent_panel
 import menu_state as _msm
 import activity_log
@@ -575,6 +576,7 @@ _NAV_BIZ   = [
     ('reporting',  '보고서',   'assignment'),
     ('outlook',    '메일분석', 'mail'),
     ('regulatory', '규제동향', 'monitoring'),
+    ('rates',      '금리모니터', 'trending_up'),
 ]
 _NAV_DASH  = [
     ('risk_dashboard',   'Risk DashBoard',          'monitor_heart'),
@@ -2476,6 +2478,13 @@ def main_page(request: Request):
                 return create_llm(model_id=state.get('selected_model_id'))
             build_regulatory_panel(_config, _llm_reg)
 
+        # ── 금리 모니터 ───────────────────────────────────────────────────
+        panel_rates = ui.element('div').classes('panel')
+        panels['rates'] = panel_rates
+        panel_rates.style('display:none;')
+        with panel_rates:
+            build_rates_panel(_config, state)
+
         # ── 관리자 ────────────────────────────────────────────────────────
         panel_admin = ui.element('div').classes('panel')
         panels['admin'] = panel_admin
@@ -2542,6 +2551,14 @@ def main_page(request: Request):
         if key == 'home':
             # 홈 탭 재진입 시마다 KPI/최근 작업 이력을 최신 값으로 다시 렌더링
             _render_home_dashboard(home_root, state)
+
+        # 탭 열람 시 훅(패널이 state['_tab_show_hooks']에 등록) — 예: 금리 자동 갱신
+        _hook = state.get('_tab_show_hooks', {}).get(key)
+        if _hook:
+            try:
+                _hook()
+            except Exception as _e:
+                log.warning("탭 on-show 훅(%s) 오류: %s", key, _e)
 
         # 마지막 방문 탭 기억 — 재접속 시 복원 (nicegui_app.storage.user, 브라우저별 영속)
         try:
