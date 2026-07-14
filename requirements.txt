@@ -8,6 +8,7 @@ langchain-openai
 unstructured
 pyhwp
 llama-cpp-python[server]
+starlette
 sse-starlette
 starlette-context
 pydantic-settings

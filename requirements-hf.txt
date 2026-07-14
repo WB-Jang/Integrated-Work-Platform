@@ -27,6 +27,7 @@ scikit-learn
 # ── 서버 인프라 ─────────────────────────────────────────────────────────────
 fastapi
 uvicorn
+starlette          # app.py 가 starlette.requests.Request 를 직접 import (직접 의존성 명시)
 sse-starlette
 starlette-context
 pydantic-settings
