@@ -457,6 +457,27 @@ html body #main-nav * {
 }
 .q-menu.model-select-menu .q-item__label { color: inherit !important; }
 
+/* ── 일반 ui.select 드롭다운 팝업 가독성 (기준월·연도·지표 선택 등) ───────────
+   .q-menu.model-select-menu 외의 모든 Quasar 팝업 메뉴가 기본 흰 배경으로 떠서
+   다크 테마의 밝은 글자와 겹쳐 '흰 글자 + 흰 배경'으로 안 보이던 문제 수정.
+   (model-select-menu 는 더 높은 specificity 로 기존 스타일을 그대로 유지) */
+.q-menu {
+  background: var(--bg-elev) !important;
+  color: var(--text-2) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: 0 12px 28px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.4) !important;
+}
+.q-menu .q-item,
+.q-menu .q-item__label,
+.q-menu .q-item__section { color: var(--text-2) !important; }
+.q-menu .q-item:hover,
+.q-menu .q-item--active,
+.q-menu .q-item.q-manual-focusable--focused {
+  background: rgba(14,165,233,.1) !important;
+  color: var(--text) !important;
+}
+
 /* Quasar global overrides — checkbox / upload / expansion 을 모노크롬에 맞춤 */
 .q-checkbox { font-size: 12.5px !important; color: var(--text-2) !important; }
 .q-checkbox__inner { color: var(--text-2) !important; }
