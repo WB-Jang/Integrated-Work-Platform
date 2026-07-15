@@ -6,6 +6,7 @@
 """
 import os
 import json
+import queue
 import asyncio
 import datetime
 import html as _html
@@ -13,12 +14,18 @@ from pathlib import Path
 
 from nicegui import ui, app, events, run as nicegui_run
 
-from reporting_runner import REPORT_CONFIGS, run_report, get_upload_dir, analyze_fx5260_var_accounts
+from reporting_runner import (
+    REPORT_CONFIGS, run_report, get_upload_dir,
+    analyze_fx5260_var_accounts, ReportInputCancelled,
+)
 import activity_log
 import llm_status
 from ui_styles import req_checklist_html, step_list_html
 
 _FX5260_STEPS = ['변동금리 분석', '금리 입력', '금리 적용', '실행']
+
+# 실행 중 사용자 입력 취소 센티넬 (from_ui 큐에 실어 워커의 request_input 을 중단시킨다)
+_CANCEL = object()
 
 
 def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
@@ -41,6 +48,9 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
         "output_files": [],
         "running": False,
         "last_log_text": "",
+        "awaiting_input": False,   # 실행 중 사용자 입력 대기 여부
+        "pending_spec": None,      # 대기 중인 입력 요청 spec
+        "_from_ui": None,          # UI→워커 답변 큐 (실행 중에만 설정)
     }
 
     # ── 헤더 ─────────────────────────────────────────────────────────────
@@ -91,6 +101,10 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
 
             run_btn = ui.button('실행').classes('btn-primary-mono w-full mt-3')
             run_btn.visible = False
+
+            # 실행 중(특히 입력 대기 중) 중단용 — 대화형 입력 취소 → 실행 중단
+            cancel_btn = ui.button('실행 중단 (입력 취소)').props('outline dense no-caps').classes('w-full mt-2')
+            cancel_btn.visible = False
 
             # 반복 실행 편의 — 저장된 직전 파라미터가 있을 때만 노출.
             # 파일은 세션마다 재업로드가 필요하므로 값만 복원한다.
@@ -340,7 +354,42 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
         except Exception:
             pass
 
+    def _restore_send_btn():
+        """LLM 가용 여부에 맞춰 전송 버튼 활성/비활성 복원."""
+        try:
+            if llm_status.is_available():
+                assistant_send_btn.props(remove='disabled')
+                assistant_send_btn.classes(remove='is-disabled')
+            else:
+                assistant_send_btn.props('disabled')
+                assistant_send_btn.classes(add='is-disabled')
+        except Exception:
+            pass
+
+    def _submit_report_answer(val: str):
+        """보고서 실행이 입력 대기 중일 때, 채팅 입력을 워커로 전달(=답변)."""
+        assistant_chat.append({'role': 'user', 'content': val})
+        _show_chat_empty(False)
+        with chat_inner_el:
+            ui.html(_msg_html('user', val))
+        _scroll_chat_to_bottom()
+        state['awaiting_input'] = False
+        state['pending_spec'] = None
+        _set_status_badge('reviewing', '실행 중')
+        fq = state.get('_from_ui')
+        if fq is not None:
+            fq.put(val)
+
     async def send_assistant_message():
+        # 보고서 실행이 사용자 입력 대기 중이면, 이 메시지는 LLM 이 아니라 워커로 전달한다.
+        if state.get('awaiting_input'):
+            val = (assistant_input.value or '').strip()
+            if not val:
+                return
+            assistant_input.value = ''
+            _submit_report_answer(val)
+            return
+
         if not llm_status.guard():
             return
         if _assistant_busy['v']:
@@ -713,27 +762,114 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
                 return None
         return params
 
+    def _enter_answer_mode(spec: dict):
+        """워커가 입력을 요청 → 채팅에 프롬프트를 띄우고 답변 대기 모드로 전환."""
+        state['awaiting_input'] = True
+        state['pending_spec'] = spec
+        prompt = spec.get('prompt') or '값을 입력해주세요.'
+        assistant_chat.append({'role': 'assistant', 'content': prompt})
+        _show_chat_empty(False)
+        with chat_inner_el:
+            ui.html(_msg_html('assistant', prompt))
+        _scroll_chat_to_bottom()
+        _set_status_badge('reviewing', '입력 대기 중')
+        # 답변할 수 있도록 전송 버튼 활성화 + 입력창 포커스
+        try:
+            assistant_send_btn.props(remove='disabled')
+            assistant_send_btn.classes(remove='is-disabled')
+            assistant_input.run_method('focus')
+        except Exception:
+            pass
+
+    def _cancel_report():
+        """실행 중단 요청 — 대기 중인(또는 다음) 입력 요청을 취소시켜 워크플로우 중단."""
+        fq = state.get('_from_ui')
+        if fq is None or not state.get('running'):
+            return
+        fq.put(_CANCEL)
+        state['awaiting_input'] = False
+        state['pending_spec'] = None
+        _set_status_badge('reviewing', '중단 중…')
+        assistant_chat.append({'role': 'user', 'content': '(실행 중단 요청)'})
+        _show_chat_empty(False)
+        with chat_inner_el:
+            ui.html(_msg_html('user', '(실행 중단 요청)'))
+        _scroll_chat_to_bottom()
+
+    cancel_btn.on_click(_cancel_report)
+
     async def execute_report(report_key: str, cfg: dict, params: dict):
         if state['running']:
             return
 
         state['running'] = True
+        state['awaiting_input'] = False
+        state['pending_spec'] = None
         progress_bar.visible = True
         run_btn.props(add='disable')
+        cancel_btn.visible = True
         download_area.clear()
         _set_status_badge('reviewing', '실행 중')
-        update_log(f"[{cfg['name']}] 실행 중...\n")
-        log_el.visible = False
-        log_toggle_btn.text = '자세히 보기 (원시 로그)'
+        # 실시간 진행 로그를 바로 보이게 한다 (대화형/일시정지 맥락 확인용)
+        log_el.visible = True
+        log_toggle_btn.text = '숨기기 (원시 로그)'
+
+        _live: list[str] = []
+
+        def _push_live(line: str):
+            _live.append(str(line))
+            update_log('\n'.join(_live))
+
+        _push_live(f"[{cfg['name']}] 실행 중...")
+
+        # 워커(io_bound 스레드) ↔ UI(이벤트 루프) 브릿지: thread-safe 큐 2개
+        to_ui: queue.Queue = queue.Queue()      # 워커 → UI (로그/입력요청)
+        from_ui: queue.Queue = queue.Queue()    # UI → 워커 (사용자 답/취소)
+        state['_from_ui'] = from_ui
+
+        def request_input(spec: dict) -> str:
+            """워커 스레드에서 호출 — UI 에 요청을 보내고 답이 올 때까지 블록."""
+            to_ui.put({'kind': 'ask', **spec})
+            ans = from_ui.get()
+            if ans is _CANCEL:
+                raise ReportInputCancelled()
+            return ans
+
+        def log_callback(line):
+            to_ui.put({'kind': 'log', 'text': str(line)})
+
+        def _drain():
+            while True:
+                try:
+                    item = to_ui.get_nowait()
+                except queue.Empty:
+                    break
+                if item.get('kind') == 'log':
+                    _push_live(item.get('text', ''))
+                elif item.get('kind') == 'ask':
+                    _enter_answer_mode(item)
+
+        poll_timer = ui.timer(0.3, _drain)
 
         try:
             ok, log_text, outputs = await nicegui_run.io_bound(
                 run_report, report_key, state['uploaded_files'], params,
+                log_callback, request_input,
             )
         finally:
             state['running'] = False
+            state['awaiting_input'] = False
+            state['pending_spec'] = None
+            state['_from_ui'] = None
+            try:
+                poll_timer.cancel()
+            except Exception:
+                pass
+            _drain()  # 남은 로그 반영
             progress_bar.visible = False
             run_btn.props(remove='disable')
+            cancel_btn.visible = False
+            _restore_send_btn()
 
         update_log(log_text)
         state['output_files'] = outputs

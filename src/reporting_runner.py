@@ -21,6 +21,10 @@ REPORTING_DIR = (BASE_DIR / "Reporting").resolve()
 if str(REPORTING_DIR) not in sys.path:
     sys.path.insert(0, str(REPORTING_DIR))
 
+
+class ReportInputCancelled(Exception):
+    """사용자가 실행 중 요청된 입력을 취소했을 때 발생 (보고서 작성 중단)."""
+
 REPORT_CONFIGS = {
     "bok_dlnq": {
         "name": "BOK 10일 연체 보고서",
@@ -215,7 +219,8 @@ def _unwrap(result: dict):
     return ok, log, outputs
 
 
-def run_report(report_key: str, file_paths: dict, params: dict, log_callback=None) -> tuple:
+def run_report(report_key: str, file_paths: dict, params: dict,
+               log_callback=None, request_input=None) -> tuple:
     """
     보고서를 실행합니다.
 
@@ -223,7 +228,10 @@ def run_report(report_key: str, file_paths: dict, params: dict, log_callback=Non
         report_key: REPORT_CONFIGS의 키
         file_paths: {"file_key": "/path/to/uploaded/file", ...}
         params: {"param_key": value, ...}
-        log_callback: 로그 메시지 콜백 (선택)
+        log_callback: 로그 메시지 콜백 (선택) — 진행 로그를 실시간 전달
+        request_input: 실행 중 사용자 입력 요청 콜백 (선택). request_input(spec: dict) -> str.
+            제공되면 보고서가 중간에 사용자에게 값을 요청하며 답이 올 때까지 블록한다.
+            None 이면 비대화형(기존 동작).
 
     Returns:
         (success, log_text, output_file_paths)
@@ -245,7 +253,9 @@ def run_report(report_key: str, file_paths: dict, params: dict, log_callback=Non
     if not runner:
         return False, f"[ERROR] 알 수 없는 보고서: {report_key}", []
     try:
-        return runner(file_paths, params, log_callback)
+        return runner(file_paths, params, log_callback, request_input)
+    except ReportInputCancelled:
+        return False, "[취소] 사용자가 입력을 취소하여 보고서 작성을 중단했습니다.", []
     except Exception:
         import traceback
         return False, f"[ERROR] 러너 예외 발생:\n{traceback.format_exc()}", []
@@ -253,7 +263,7 @@ def run_report(report_key: str, file_paths: dict, params: dict, log_callback=Non
 
 # ─── 개별 러너 함수들 (모두 Reporting/ 의 generate_report 를 in-process 호출) ───
 
-def _run_bok_dlnq(file_paths, params, log_callback):
+def _run_bok_dlnq(file_paths, params, log_callback, request_input=None):
     from BOK_DLNQ_10days_make import generate_report
     return _unwrap(generate_report(
         file_paths["raw"], file_paths["format"],
@@ -261,42 +271,42 @@ def _run_bok_dlnq(file_paths, params, log_callback):
     ))
 
 
-def _run_fx5220_1st(file_paths, params, log_callback):
+def _run_fx5220_1st(file_paths, params, log_callback, request_input=None):
     from FX5220_make_1st import generate_report
     return _unwrap(generate_report(file_paths["raw"], params["dt"]))
 
 
-def _run_fx5220_2nd(file_paths, params, log_callback):
+def _run_fx5220_2nd(file_paths, params, log_callback, request_input=None):
     from FX5220_make_2nd import generate_report
     return _unwrap(generate_report(file_paths["raw"], file_paths["format"], params["dt"]))
 
 
-def _run_fss_dlnq(file_paths, params, log_callback):
+def _run_fss_dlnq(file_paths, params, log_callback, request_input=None):
     from FSS_dlnq_report_make import generate_report
     return _unwrap(generate_report(file_paths["raw"], file_paths["format"], params["yymmdd"]))
 
 
-def _run_corp_loan(file_paths, params, log_callback):
+def _run_corp_loan(file_paths, params, log_callback, request_input=None):
     from CORP_LOAN import generate_report
     return _unwrap(generate_report(file_paths["raw"], file_paths["format"], params["dt"]))
 
 
-def _run_bok_statistical(file_paths, params, log_callback):
+def _run_bok_statistical(file_paths, params, log_callback, request_input=None):
     from bok_statistical_report import generate_report
     return _unwrap(generate_report(file_paths["raw"], params["yyyymm"]))
 
 
-def _run_local_rir(file_paths, params, log_callback):
+def _run_local_rir(file_paths, params, log_callback, request_input=None):
     from Local_RIR import generate_report
     return _unwrap(generate_report(file_paths["raw"], params["yyyymm"]))
 
 
-def _run_b2419(file_paths, params, log_callback):
+def _run_b2419(file_paths, params, log_callback, request_input=None):
     from B2419_make import generate_report
     return _unwrap(generate_report(file_paths["raw"], params["yyyymm"], params["end_dt"]))
 
 
-def _run_risk_limit(file_paths, params, log_callback):
+def _run_risk_limit(file_paths, params, log_callback, request_input=None):
     from Risk_limit_monitoring import generate_report
     return _unwrap(generate_report(
         file_paths["raw"], file_paths["ksic"], file_paths["main_debt_group"],
@@ -313,7 +323,7 @@ def _parse_ea(s):
     return (vals + [0, 0, 0, 0])[:4]
 
 
-def _run_crir(file_paths, params, log_callback):
+def _run_crir(file_paths, params, log_callback, request_input=None):
     from CRIR import generate_report
 
     base_ym = (params.get("base_ym") or "").strip()
@@ -335,11 +345,36 @@ def _run_crir(file_paths, params, log_callback):
     ))
 
 
-def _run_fx5260(file_paths, params, log_callback):
+def _ask_rate(request_input, acct):
+    """변동금리 계좌의 기준금리(%)를 대화형으로 입력받아 float 로 반환.
+
+    사용자에게 해당 계좌번호를 보여주며 기준금리를 요청하고, 숫자가 아니면 재질문한다.
+    사용자가 취소하면 request_input 이 ReportInputCancelled 를 발생시킨다.
+    """
+    prompt = f"[FX5260] 변동금리 계좌 {acct} 의 기준금리(%)를 입력하세요"
+    while True:
+        ans = request_input({
+            "kind": "ask",
+            "field": "base_rate",
+            "account": str(acct),
+            "prompt": prompt,
+        })
+        try:
+            return float(str(ans).strip().replace("%", ""))
+        except (TypeError, ValueError):
+            prompt = (
+                f"[FX5260] '{ans}' 은(는) 숫자가 아닙니다. "
+                f"계좌 {acct} 의 기준금리(%)를 숫자로만 다시 입력하세요 (예: 3.5)"
+            )
+
+
+def _run_fx5260(file_paths, params, log_callback, request_input=None):
     """FX5260 - 변동금리 계좌 처리가 필요한 복잡 스크립트 (러너 내부에서 직접 처리).
 
-    (변동금리 금리를 var_rates_json 파라미터로 비대화형 처리하기 위해 다른 보고서와
-    달리 러너 내부에 인라인 구현을 유지한다.)
+    변동금리 계좌의 기준금리는 다음 우선순위로 결정한다:
+      1) var_rates_json 파라미터에 사전 입력된 값
+      2) request_input 콜백(대화형): 실행을 멈추고 채팅으로 계좌별 기준금리를 요청
+      3) 둘 다 없으면(비대화형/배치): 0.0% + 경고 (기존 하위호환 동작)
     """
     import pandas as pd
     from datetime import datetime
@@ -358,6 +393,18 @@ def _run_fx5260(file_paths, params, log_callback):
         except Exception:
             return False, "[ERROR] 변동금리 JSON 파싱 실패. 형식을 확인해주세요.", []
 
+    log = ""
+
+    def _emit(line):
+        """로그를 누적 문자열에 쌓으면서 log_callback 으로 실시간 전달."""
+        nonlocal log
+        log += line + "\n"
+        if log_callback:
+            try:
+                log_callback(line)
+            except Exception:
+                pass
+
     try:
         raw = pd.read_csv(file_paths["sql_result"], sep=",", encoding="euc-kr")
         raw_crms = pd.read_csv(file_paths["crms"], sep=",", encoding="euc-kr")
@@ -365,7 +412,7 @@ def _run_fx5260(file_paths, params, log_callback):
     except Exception as e:
         return False, f"[ERROR] 파일 읽기 실패: {e}", []
 
-    log = "[INFO] 파일 로드 완료\n"
+    _emit("[INFO] 파일 로드 완료")
 
     try:
         raw_copied = raw.copy()
@@ -393,20 +440,36 @@ def _run_fx5260(file_paths, params, log_callback):
         raw_crms_filtered = raw_crms_filtered[raw_crms_filtered["약정계정구분_x"] == "-"]
         raw_crms_filtered = raw_crms_filtered.reset_index()
 
-        var_accounts = []
+        # 변동금리 계좌 수 파악 (진행 안내용)
+        _var_total = int((~raw_crms_filtered["계정과목코드"].isin(fix_int_cd)).sum())
+        if _var_total:
+            _emit(f"[INFO] 변동금리 계좌 {_var_total}건 — 계좌별 기준금리 확인이 필요합니다.")
+
+        var_accounts = []   # 비대화형에서 금리 미입력된 계좌
+        _var_seen = 0
         for idx in range(len(raw_crms_filtered)):
             if raw_crms_filtered.loc[idx, "계정과목코드"] in fix_int_cd:
+                # 고정금리 계좌 — 자동 계산 (사용자 입력 불필요)
                 raw_crms_filtered.loc[idx, "int_type"] = "fix"
                 raw_crms_filtered.loc[idx, "interest_amt_fix"] = (
                     raw_crms_filtered.loc[idx, "미화환산잔액"]
                     * (raw_crms_filtered.loc[idx, "대출이율"] / 100)
                 )
             else:
+                # 변동금리 계좌 — 기준금리를 사용자에게 요청
                 acct = str(raw_crms_filtered.loc[idx, "acct_no"])
                 raw_crms_filtered.loc[idx, "int_type"] = "var"
+                _var_seen += 1
                 if acct in var_rates:
                     rate = float(var_rates[acct])
+                    _emit(f"[{_var_seen}/{_var_total}] 계좌 {acct}: 사전 입력값 {rate}% 적용")
+                elif request_input is not None:
+                    # 대화형: 실행을 멈추고 채팅으로 이 계좌의 기준금리를 입력받는다.
+                    _emit(f"[{_var_seen}/{_var_total}] 계좌 {acct}: 기준금리 입력 대기 중…")
+                    rate = _ask_rate(request_input, acct)
+                    _emit(f"[{_var_seen}/{_var_total}] 계좌 {acct}: {rate}% 적용")
                 else:
+                    # 비대화형(배치): 미입력 → 0% + 경고
                     var_accounts.append(acct)
                     rate = 0.0
                 raw_crms_filtered.loc[idx, "new_interest_var"] = rate
@@ -415,10 +478,10 @@ def _run_fx5260(file_paths, params, log_callback):
                 )
 
         if var_accounts:
-            log += f"[주의] 다음 변동금리 계좌의 금리가 입력되지 않았습니다 (0%로 처리됨):\n"
+            _emit("[주의] 다음 변동금리 계좌의 금리가 입력되지 않았습니다 (0%로 처리됨):")
             for a in var_accounts:
-                log += f"  - {a}\n"
-            log += "채팅창에 JSON 형식으로 금리를 입력한 후 재실행해주세요.\n"
+                _emit(f"  - {a}")
+            _emit("채팅창에 JSON 형식으로 금리를 입력한 후 재실행하거나, 대화형 실행을 사용하세요.")
 
         import numpy as np
         ntnl_cd_map = {100: "KR", 193: "CN", 131: "TH", 621: "EG"}
@@ -458,9 +521,12 @@ def _run_fx5260(file_paths, params, log_callback):
 
         out_path = upload_dir / "FX5260_최종보고서.csv"
         final_report.to_csv(str(out_path), encoding="utf-8-sig", quoting=1, index=False)
-        log += f"[INFO] 보고서 저장 완료: {out_path.name}\n"
+        _emit(f"[INFO] 보고서 저장 완료: {out_path.name}")
         return True, log, [str(out_path)]
 
+    except ReportInputCancelled:
+        # 사용자 입력 취소는 run_report 상위에서 처리하도록 그대로 전파
+        raise
     except Exception as e:
         import traceback
         return False, f"[ERROR] 처리 중 오류:\n{traceback.format_exc()}", []
