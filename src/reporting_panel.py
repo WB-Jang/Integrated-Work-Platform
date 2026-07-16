@@ -66,14 +66,39 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
     with ui.element('div').classes('tri-col-row'):
 
         # ── 좌측: 보고서 목록 ────────────────────────────────────────────
+        # group 을 가진 보고서(예: fx5220_1st/2nd)는 하나의 메뉴로 축약해 표시하고,
+        # 중앙의 변형 선택 버튼으로 각 변형을 실행한다.
+        # _display_id(key): 좌측 목록에서 그 보고서를 대표하는 항목 id
+        #   (그룹 소속이면 'group:<g>', 아니면 key 자체).
+        def _display_id(key: str) -> str:
+            g = REPORT_CONFIGS[key].get('group')
+            return f'group:{g}' if g else key
+
+        def _variants_of(group: str) -> list:
+            return [k for k, c in REPORT_CONFIGS.items() if c.get('group') == group]
+
         with ui.element('div'):
             ui.html('<div class="muted-label">REPORTS</div>')
-            report_btns = {}
+            report_btns = {}          # display_id -> 좌측 목록 요소
+            _seen_groups = set()
             for key, cfg in REPORT_CONFIGS.items():
+                g = cfg.get('group')
+                if g:
+                    if g in _seen_groups:
+                        continue      # 그룹은 첫 등장 시 한 번만 항목 생성
+                    _seen_groups.add(g)
+                    disp_id = f'group:{g}'
+                    label = cfg.get('group_name', cfg['name'])
+                    default_key = _variants_of(g)[0]   # 그룹 항목 클릭 시 기본 변형
+                else:
+                    disp_id = key
+                    label = cfg['name']
+                    default_key = key
                 btn = ui.element('div').classes('list-item')
                 with btn:
-                    ui.html(f'<span>{_html.escape(cfg["name"])}</span>')
-                report_btns[key] = btn
+                    ui.html(f'<span>{_html.escape(label)}</span>')
+                btn._default_key = default_key   # 클릭 시 선택할 실제 보고서 키
+                report_btns[disp_id] = btn
 
         # ── 중앙: 파일 업로드 / 파라미터 입력 ─────────────────────────────
         with ui.element('div').style('display:flex; flex-direction:column;'):
@@ -92,6 +117,9 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
             # 단순 보고서용 진행 요약 바 — FX5260 등 다단계(wizard) 보고서는
             # 자체 스텝퍼가 이미 진행 상태를 보여주므로 여기서는 표시하지 않는다.
             progress_summary_el = ui.html('')
+
+            # 변형(variant) 선택 — 그룹 보고서(FX5220 1차/2차 등)에서만 노출
+            variant_area = ui.row().classes('w-full gap-2 mb-2')
 
             upload_area = ui.column().classes('w-full')
             param_area = ui.column().classes('w-full mt-2')
@@ -698,13 +726,36 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
 
             analyze_btn.on_click(_do_analyze)
 
+    def refresh_variant_area(report_key: str):
+        """그룹 보고서(FX5220 등)의 변형 선택 버튼(1차/2차)을 렌더. 그룹이 아니면 비움."""
+        variant_area.clear()
+        cfg = REPORT_CONFIGS[report_key]
+        g = cfg.get('group')
+        if not g:
+            return
+        with variant_area:
+            ui.html(
+                '<span style="font-size:12px;color:var(--text-3);font-weight:600;'
+                'align-self:center;margin-right:2px;">유형 선택</span>'
+            )
+            for vkey in _variants_of(g):
+                vcfg = REPORT_CONFIGS[vkey]
+                label = vcfg.get('variant_label', vcfg['name'])
+                is_active = (vkey == report_key)
+                b = ui.button(label)
+                if is_active:
+                    b.classes('btn-primary-mono').props('dense no-caps')
+                else:
+                    b.props('outline dense no-caps')
+                b.on('click', lambda _e, k=vkey: asyncio.create_task(select_report(k)))
+
     async def select_report(key: str):
         state['selected'] = key
         state['output_files'].clear()
 
         for k, btn in report_btns.items():
             btn.classes(remove='active')
-        report_btns[key].classes(add='active')
+        report_btns[_display_id(key)].classes(add='active')
 
         cfg = REPORT_CONFIGS[key]
         hint_label.content = (
@@ -716,6 +767,7 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
             '</div>'
         )
 
+        refresh_variant_area(key)
         state['upload_dir'] = get_upload_dir(key)
         refresh_upload_area(key)
         refresh_param_area(key)
@@ -729,8 +781,12 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
         log_toggle_btn.text = '자세히 보기 (원시 로그)'
         _refresh_checklist()
 
-    for key in REPORT_CONFIGS:
-        report_btns[key].on('click', lambda _e, k=key: asyncio.create_task(select_report(k)))
+    # 좌측 목록 클릭 → 그 항목의 기본 보고서 키로 선택 (그룹이면 첫 변형)
+    for _disp_id, _btn in report_btns.items():
+        report_btns[_disp_id].on(
+            'click',
+            lambda _e, k=_btn._default_key: asyncio.create_task(select_report(k)),
+        )
 
     def _validate_and_build_params(cfg: dict):
         """필수 파일/파라미터를 검증하고 params dict 를 만든다.

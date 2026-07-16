@@ -44,6 +44,11 @@ REPORT_CONFIGS = {
         "name": "FX5220 보고서 (1차)",
         "description": "외화여신 FX5220 1차 - 신규 외화여신 현황 (Outlook 자료요청 메일 포함)",
         "icon": "💱",
+        # 좌측 목록에서 fx5220_2nd 와 하나의 'FX5220 보고서' 메뉴로 묶이고,
+        # 중앙의 변형 선택 버튼(1차/2차)으로 각 러너를 실행한다.
+        "group": "fx5220",
+        "group_name": "FX5220 보고서",
+        "variant_label": "1차",
         "files": [
             {"key": "raw", "label": "통합 raw.xlsx (시트: cur_raw/bf_rm_info)", "hint": "복호화 필수"},
         ],
@@ -56,6 +61,9 @@ REPORT_CONFIGS = {
         "name": "FX5220 보고서 (2차)",
         "description": "외화여신 FX5220 2차 - RM 정보 추가 및 양식 '입력표' 피벗 기입",
         "icon": "💱",
+        "group": "fx5220",
+        "group_name": "FX5220 보고서",
+        "variant_label": "2차",
         "files": [
             {"key": "raw", "label": "통합 raw.xlsx (cur_raw/bf_rm_info/cur_response)", "hint": "복호화 필수"},
             {"key": "format", "label": "양식 format.xlsx (입력표)", "hint": "복호화 필수"},
