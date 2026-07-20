@@ -1079,51 +1079,6 @@ def main_page(request: Request):
                 '</button>'
             )
 
-            # ── Phase 3: 밀도 토글 (compact/normal), storage.user 에 영속 ──────
-            try:
-                _density_val = nicegui_app.storage.user.get('density', 'normal')
-            except Exception:
-                _density_val = 'normal'
-            density_state = {'value': _density_val}
-            _density_icon = 'density_small' if _density_val == 'normal' else 'density_medium'
-            density_btn_html = ui.html(
-                f'<button class="density-toggle-btn" id="density-toggle" type="button" '
-                f'aria-label="화면 밀도 전환 (컴팩트/일반)" title="화면 밀도 전환">'
-                f'<span class="material-symbols-outlined" id="density-toggle-icon">{_density_icon}</span>'
-                f'</button>'
-            )
-
-            def _toggle_density():
-                density_state['value'] = (
-                    'compact' if density_state['value'] == 'normal' else 'normal'
-                )
-                try:
-                    nicegui_app.storage.user['density'] = density_state['value']
-                except Exception:
-                    pass
-                _icon = 'density_small' if density_state['value'] == 'normal' else 'density_medium'
-                ui.run_javascript(
-                    f'document.body.setAttribute("data-density", "{density_state["value"]}");'
-                    f'const ic = document.getElementById("density-toggle-icon"); '
-                    f'if (ic) ic.textContent = "{_icon}";'
-                )
-
-            density_toggle_trigger = ui.button().props('id=density-toggle-real-btn').style('display:none;')
-            density_toggle_trigger.on('click', lambda: _toggle_density())
-            ui.run_javascript(
-                f'document.body.setAttribute("data-density", "{_density_val}");'
-            )
-            ui.add_body_html('''
-<script>
-(function(){
-  document.addEventListener('click', function(e){
-    if (!e.target.closest('#density-toggle')) return;
-    document.getElementById('density-toggle-real-btn')?.click();
-  });
-})();
-</script>
-''')
-
             model_select = ui.select(
                 options=list(MODEL_OPTIONS.keys()),
                 value=_DEFAULT_MODEL,
