@@ -196,21 +196,37 @@ def _call(session: requests.Session, svc: str, fn: str, dto_xml: str) -> ET.Elem
 
 
 def _rows(root: ET.Element, dto_suffix: str = "DTO") -> "list[dict]":
-    """응답에서 반복되는 DTO 엘리먼트들을 {자식태그: 텍스트} dict 리스트로 추출.
+    """응답에서 실제 데이터 행(DTO)을 {자식태그: 텍스트} dict 리스트로 추출.
 
-    Proframe 응답은 <message>...<XxxDTO>...</XxxDTO>(반복) 형태가 일반적이며,
-    <vector>/<data> 래퍼가 끼는 변형도 있어 태그 접미사로 유연하게 수집한다.
+    Proframe(DBIO) 응답은 결과셋 래퍼 DTO 안에 dbio_total_count_ 등 메타데이터와
+    함께 반복 데이터 DTO 가 중첩되는 형태가 있다:
+        <XxxDTO>
+          <dbio_total_count_>..</dbio_total_count_> ...(메타)
+          <YyyDTO>...실제 필드...</YyyDTO>   ← 반복 데이터 행
+        </XxxDTO>
+    따라서 (1) 중첩 DTO 를 가진 래퍼는 건너뛰고 리프(leaf) DTO 만 행으로 채택하며,
+    (2) dbio_* 메타데이터 필드는 제외한다. 평면 구조
+    (<message><ZzzDTO>...필드...</ZzzDTO>)도 그대로 처리된다.
     """
     out = []
     for el in root.iter():
         tag = el.tag.split('}')[-1]  # 네임스페이스 제거
-        if tag.endswith(dto_suffix) and len(list(el)) > 0:
-            row = {}
-            for child in el:
-                ctag = child.tag.split('}')[-1]
-                row[ctag] = (child.text or "").strip()
-            if row:
-                out.append(row)
+        if not tag.endswith(dto_suffix):
+            continue
+        children = list(el)
+        if not children:
+            continue
+        # 자식 중 또다른 DTO 가 있으면 이 요소는 결과셋 래퍼 → 실제 행이 아님
+        if any(c.tag.split('}')[-1].endswith(dto_suffix) for c in children):
+            continue
+        row = {}
+        for child in children:
+            ctag = child.tag.split('}')[-1]
+            if ctag.startswith('dbio_'):   # DBIO 메타데이터 필드 제외
+                continue
+            row[ctag] = (child.text or "").strip()
+        if row:
+            out.append(row)
     return out
 
 
