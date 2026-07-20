@@ -1,183 +1,109 @@
 """
-금융감독원(FSS) Open API 기반 Risk Dashboard 패널.
+금융감독원(FSS) 관련 Risk Dashboard 패널.
 
 표시 항목:
-  - 제재·조치 현황
+  - 금융감독원 보도자료
   - 금융사고 공시
   - 검사·감독 결과
-  - 금융회사 경영공시 (보도자료 기반 대체)
+  - 금융회사 경영공시
 
-FSS Open API가 응답하지 않을 경우 연합뉴스 RSS 카테고리별 키워드 검색으로 대체.
+카테고리별 네이버 뉴스 검색 API로 관련 기사를 수집한다(원문 링크가 유효한 실제
+기사). NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 환경변수(HF Spaces Secrets)가 필요하다.
 """
+import os
+import re
 import html as _html
 import datetime
+from email.utils import parsedate_to_datetime
 
 import requests
-import feedparser
 
 from nicegui import ui, run as nicegui_run
 from logger import get_logger
 
 log = get_logger("fss_dashboard")
 
-# ── FSS Open API 엔드포인트 ───────────────────────────────────────────────────
-# 구 open.fss.or.kr 서비스 종료 → www.fss.or.kr 이전, 파라미터 auth→authKey
-# 현재 확인된 동작 엔드포인트: fcnInfo.jsp (금융소비자뉴스/보도자료)
-_BASE = "http://www.fss.or.kr/fss/kr/openApi/api"
-_FSS_FCN_URL = f"{_BASE}/fcnInfo.jsp"
-
-# 대시보드 4개 카테고리 — FSS API는 fcnInfo(보도자료)만 동작 확인됨;
-# 나머지는 연합뉴스 RSS 키워드 폴백으로 채움
-_ENDPOINTS = {
-    "금융감독원 보도자료": _FSS_FCN_URL,
-    "금융사고 공시":       None,
-    "검사·감독 결과":      None,
-    "금융회사 경영공시":   None,
+# ── 대시보드 4개 카테고리 ─────────────────────────────────────────────────────
+# 각 카테고리를 네이버 뉴스 검색 질의어로 매핑한다.
+_CATEGORY_QUERIES = {
+    "금융감독원 보도자료": "금융감독원 보도자료",
+    "금융사고 공시":       "금융사고 금융감독원",
+    "검사·감독 결과":      "금융감독원 검사 제재",
+    "금융회사 경영공시":   "금융회사 경영공시",
 }
 
-# 카테고리별 연합뉴스 폴백 키워드
-_YONHAP_FALLBACK_KEYWORDS = {
-    "금융감독원 보도자료": ["금감원 보도자료", "금융감독원 발표", "금감원 공지", "금감원"],
-    "금융사고 공시":       ["금융사고", "금감원 공시", "횡령", "사기", "금융범죄"],
-    "검사·감독 결과":      ["금감원 검사", "금융감독원 검사", "금감원 감독", "현장검사"],
-    "금융회사 경영공시":   ["금융회사 공시", "경영공시", "금감원 공개", "지배구조"],
-}
-
-_YONHAP_RSS_URLS = [
-    "https://www.yna.co.kr/rss/economy.xml",
-    "https://www.yna.co.kr/rss/market.xml",
-]
-
+# ── 네이버 뉴스 검색 API ──────────────────────────────────────────────────────
+_NAVER_NEWS_URL = "https://openapi.naver.com/v1/search/news.json"
 _REQUESTS_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
-def _fetch_fss_fcn(api_key: str, count: int = 10) -> list[dict]:
-    """
-    FSS fcnInfo API (금융소비자뉴스/보도자료) 호출.
-    www.fss.or.kr 이전 후 확인된 유일한 동작 엔드포인트.
-    """
+def _strip_html(s: str) -> str:
+    """네이버 응답의 <b> 태그·HTML 엔티티를 제거해 순수 텍스트로 변환."""
+    s = re.sub(r"<[^>]+>", "", s or "")
+    return _html.unescape(s).strip()
+
+
+def _fmt_pubdate(pub: str) -> str:
+    """RFC822 pubDate(예: 'Mon, 14 Jul 2025 09:00:00 +0900') → 'YYYY-MM-DD'."""
     try:
-        today = datetime.date.today().strftime("%Y%m%d")
-        start = (datetime.date.today() - datetime.timedelta(days=30)).strftime("%Y%m%d")
+        return parsedate_to_datetime(pub).strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def _fetch_naver_news(query: str, count: int = 10) -> list[dict]:
+    """네이버 뉴스 검색 API로 query 관련 최신 기사를 반환.
+
+    NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 미설정 또는 오류 시 빈 리스트.
+    """
+    cid = os.environ.get("NAVER_CLIENT_ID", "").strip()
+    csec = os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+    if not (cid and csec):
+        log.warning("네이버 검색 자격증명(NAVER_CLIENT_ID/SECRET) 미설정")
+        return []
+    try:
         resp = requests.get(
-            _FSS_FCN_URL,
-            params={
-                "authKey": api_key,
-                "pageCount": max(count, 5),
-                "apiType": "json",
-                "startDate": start,
-                "endDate": today,
+            _NAVER_NEWS_URL,
+            params={"query": query, "display": max(count, 5), "sort": "date"},
+            headers={
+                "X-Naver-Client-Id": cid,
+                "X-Naver-Client-Secret": csec,
+                **_REQUESTS_HEADERS,
             },
-            headers=_REQUESTS_HEADERS,
             timeout=10,
         )
         resp.raise_for_status()
-        import json as _json
-        parsed = _json.loads(resp.content.decode("euc-kr", errors="replace"))
-        raw = parsed.get("reponse", {}).get("result", [])
-        return [
-            {
-                "title":   item.get("subject", "").strip(),
-                "url":     item.get("originUrl", "").strip(),
-                "regDate": item.get("regDate", "")[:10],
-                "content": "",
-            }
-            for item in raw[:count]
-            if item.get("subject")
-        ]
+        data = resp.json()
+        out = []
+        for it in data.get("items", [])[:count]:
+            title = _strip_html(it.get("title", ""))
+            # originallink(원본 언론사) 우선, 없으면 link(네이버뉴스)
+            url = (it.get("originallink") or it.get("link") or "").strip()
+            if not title or not url:
+                continue
+            out.append({
+                "title": title,
+                "url": url,
+                "regDate": _fmt_pubdate(it.get("pubDate", "")),
+                "content": _strip_html(it.get("description", ""))[:200],
+                "_source": "네이버뉴스",
+            })
+        return out
     except Exception as exc:
-        log.warning("FSS fcnInfo API 호출 실패: %s", exc)
+        log.warning("네이버 뉴스 검색 실패 (%s): %s", query, exc)
         return []
 
 
-def _fetch_yonhap_entries_cached() -> list[dict]:
-    """연합뉴스 RSS를 가져옵니다 (경제+시장 합산, 중복 제거)."""
-    entries: dict[str, dict] = {}
-    for rss_url in _YONHAP_RSS_URLS:
-        try:
-            feed = feedparser.parse(rss_url)
-            for e in feed.entries:
-                link = e.get("link", "")
-                if link and link not in entries:
-                    entries[link] = {
-                        "title": e.get("title", "").strip(),
-                        "url": link,
-                        "summary": e.get("summary", "").strip(),
-                        "regDate": "",
-                    }
-                    t = e.get("published_parsed")
-                    if t:
-                        try:
-                            entries[link]["regDate"] = (
-                                f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d}"
-                            )
-                        except Exception:
-                            pass
-        except Exception as exc:
-            log.warning("연합뉴스 RSS 파싱 오류 (%s): %s", rss_url, exc)
-    return list(entries.values())
+def _fetch_all_categories(api_key: str = None, count: int = 10) -> dict[str, list[dict]]:
+    """4개 카테고리를 네이버 뉴스 검색으로 수집한다(원문 링크가 유효한 실제 기사).
 
-
-def _search_yonhap_for_category(
-    yonhap_entries: list[dict], keywords: list[str], count: int
-) -> list[dict]:
-    """연합뉴스 항목에서 카테고리 키워드에 매칭되는 기사를 반환."""
-    # 개별 어절로도 확장 (복합 키워드 처리)
-    expanded: list[str] = []
-    seen: set[str] = set()
-    for kw in keywords:
-        kw_lo = kw.lower()
-        if kw_lo not in seen:
-            expanded.append(kw_lo)
-            seen.add(kw_lo)
-        for tok in kw_lo.split():
-            if len(tok) >= 2 and tok not in seen:
-                expanded.append(tok)
-                seen.add(tok)
-
-    results = []
-    for e in yonhap_entries:
-        text = (e["title"] + " " + e["summary"]).lower()
-        if any(kw in text for kw in expanded):
-            results.append({
-                "title": e["title"],
-                "url": e["url"],
-                "regDate": e.get("regDate", ""),
-                "content": e.get("summary", "")[:200],
-                "_source": "연합뉴스",
-            })
-            if len(results) >= count:
-                break
-    return results
-
-
-def _fetch_all_categories(api_key: str, count: int = 10) -> dict[str, list[dict]]:
-    """4개 카테고리를 수집합니다.
-    - '금융감독원 보도자료': FSS fcnInfo API → 실패 시 연합뉴스 대체
-    - 나머지 3개: 연합뉴스 RSS 키워드 검색 (해당 FSS API 엔드포인트 미확인)
+    api_key 인자는 호출부 호환을 위해 유지하나 사용하지 않는다(네이버 자격증명은
+    NAVER_CLIENT_ID/SECRET 환경변수 사용).
     """
-    yonhap_entries: list[dict] | None = None
-
     results = {}
-    for label, fss_url in _ENDPOINTS.items():
-        items: list[dict] = []
-
-        # FSS API가 있는 카테고리만 먼저 시도
-        if fss_url and api_key:
-            items = _fetch_fss_fcn(api_key, count)
-            if items:
-                log.info("FSS API '%s': %d건", label, len(items))
-
-        if not items:
-            if yonhap_entries is None:
-                yonhap_entries = _fetch_yonhap_entries_cached()
-            kws = _YONHAP_FALLBACK_KEYWORDS.get(label, [])
-            items = _search_yonhap_for_category(yonhap_entries, kws, count)
-            if items:
-                log.info("FSS '%s' → 연합뉴스 대체 %d건", label, len(items))
-            else:
-                log.info("FSS '%s' → 연합뉴스도 결과 없음", label)
-
+    for label, query in _CATEGORY_QUERIES.items():
+        items = _fetch_naver_news(query, count)
+        log.info("네이버 뉴스 '%s': %d건", label, len(items))
         results[label] = items
     return results
 
@@ -194,21 +120,26 @@ def build_fss_dashboard_panel(config: dict):
             '<div class="titles">'
             '<div class="page-title">Risk DashBoard</div>'
             '<div class="page-subtitle">'
-            '금융감독원 Open API 기반 — 제재·사고·검사·경영공시 현황을 한눈에 확인합니다.'
+            '네이버 뉴스 검색 기반 — 보도자료·사고·검사·경영공시 관련 기사를 한눈에 확인합니다.'
             '</div>'
             '</div>'
         )
 
-    # ── API 키 없을 때 경고 배너 ──────────────────────────────────────────
-    if not fss_api_key:
+    # ── 네이버 검색 자격증명 없을 때 경고 배너 ────────────────────────────
+    _naver_ready = bool(
+        os.environ.get("NAVER_CLIENT_ID", "").strip()
+        and os.environ.get("NAVER_CLIENT_SECRET", "").strip()
+    )
+    if not _naver_ready:
         with ui.element('div').style(
             'margin:16px 32px;padding:12px 16px;'
             'background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);border-radius:8px;'
             'font-size:13px;color:var(--warning);'
         ):
             ui.html(
-                '<b>⚠ FSS API 키 미설정</b> — config.json의 <code>fss_api_key</code> 값을 입력하면 '
-                '실제 데이터를 불러옵니다. 현재는 연합뉴스 RSS로 대체됩니다.'
+                '<b>⚠ 네이버 검색 자격증명 미설정</b> — '
+                '<code>NAVER_CLIENT_ID</code> / <code>NAVER_CLIENT_SECRET</code> 환경변수(HF Spaces Secrets)를 '
+                '설정하면 뉴스 기사를 불러옵니다.'
             )
 
     # ── 컨트롤 바 ────────────────────────────────────────────────────────
@@ -300,11 +231,11 @@ def build_fss_dashboard_panel(config: dict):
                     'min-height:280px;'
                 ):
                     # 카드 헤더
-                    is_yonhap = items and items[0].get("_source") == "연합뉴스"
+                    is_naver = items and items[0].get("_source") == "네이버뉴스"
                     source_note = (
                         '<span style="font-size:10.5px;color:var(--text-4);margin-left:6px;">'
-                        '연합뉴스 대체</span>'
-                    ) if is_yonhap else ""
+                        '네이버뉴스</span>'
+                    ) if is_naver else ""
                     ui.html(
                         f'<div style="display:flex;align-items:center;gap:8px;'
                         f'margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border);">'
@@ -321,7 +252,7 @@ def build_fss_dashboard_panel(config: dict):
                     if not items:
                         ui.html(
                             '<div style="text-align:center;color:var(--text-4);font-size:12.5px;'
-                            'padding:20px 0;">데이터 없음 (FSS API 및 연합뉴스 검색 결과 없음)</div>'
+                            'padding:20px 0;">데이터 없음 (네이버 뉴스 검색 결과 없음)</div>'
                         )
                     else:
                         for item in items:
@@ -361,7 +292,7 @@ def build_fss_dashboard_panel(config: dict):
 
     # 초기 빈 그리드 렌더링
     with dashboard_grid:
-        for category in _ENDPOINTS:
+        for category in _CATEGORY_QUERIES:
             icon_map = {
                 "제재·조치 현황":    ("gavel",           "#ef4444"),
                 "금융사고 공시":    ("warning",          "#f59e0b"),

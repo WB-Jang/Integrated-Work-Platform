@@ -195,34 +195,7 @@ def build_legal_panel(config: dict, user_ip: str = "", persona_block: str = "",
         with scroll_area:
             chat_inner = ui.element('div').classes('chat-inner')
 
-        # ── C-4: 대화 시작 후에도 예시 질의에 접근 가능한 접이식 칩 ────────
         with ui.element('div').classes('composer-wrap'):
-            with ui.row().classes('items-center gap-2').style('padding:0 4px;'):
-                sugg_toggle_btn = ui.button('예시 질의 보기').props('flat dense no-caps').style(
-                    'font-size:11px;color:var(--text-3);padding:2px 6px;'
-                )
-            sugg_persist_row = ui.element('div').classes('suggestion-grid').style('display:none;margin:4px 0 8px;')
-            with sugg_persist_row:
-                for title, sub, prompt in _LEGAL_SUGGESTIONS:
-                    pb = ui.element('button').classes('suggestion')
-                    with pb:
-                        ui.html(
-                            f'<span class="s-title">{_html.escape(title)}</span>'
-                            f'<span class="s-sub">{_html.escape(sub)}</span>'
-                        )
-                    pb.on('click', lambda _e, p=prompt: asyncio.create_task(do_search(p)))
-
-            sugg_state = {'open': False}
-
-            def _toggle_persist_suggestions():
-                sugg_state['open'] = not sugg_state['open']
-                sugg_persist_row.style(
-                    'display:grid;margin:4px 0 8px;' if sugg_state['open'] else 'display:none;'
-                )
-                sugg_toggle_btn.text = '예시 질의 숨기기' if sugg_state['open'] else '예시 질의 보기'
-
-            sugg_toggle_btn.on_click(_toggle_persist_suggestions)
-
             with ui.element('div').classes('composer'):
                 query_input = ui.textarea(
                     placeholder='법률 질문을 입력하세요 — 예: 개인정보 보호법상 정보주체의 권리는?',

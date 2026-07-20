@@ -3126,7 +3126,7 @@ def _build_qa_panel(parent, state, create_llm_fn):
 
         emb_cfg = _config.get('legal_embedding', {})
 
-        with ui.element('div').classes('split'):
+        with ui.element('div').classes('split').style('grid-template-columns:clamp(260px,24vw,340px) 1fr;'):
             with ui.element('div').classes('pane'):
                 with ui.element('div').classes('pane-head'):
                     ui.html(
