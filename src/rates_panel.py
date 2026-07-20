@@ -212,40 +212,44 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
         if pstate["loading"]:
             return
         pstate["loading"] = True
-        progress_bar.visible = True
-        refresh_btn.props(add='disable')
-        last_updated_label.content = (
-            '<span style="color:var(--text-4);font-size:12px;">조회 중…</span>'
-        )
-        try:
-            data = await nicegui_run.io_bound(rates_scraper.get_rates, force)
-            _show(data)
-            ui.notify('금리 정보 갱신 완료', type='positive', position='top')
-        except rates_scraper.RatesNotConfiguredError as e:
-            # 실제 요청이 아직 연결되지 않은 상태 — 경고로 안내(오류 아님)
-            log.warning("금리 조회 미설정: %s", e)
-            _render_empty(
-                "금리 조회 요청이 아직 설정되지 않았습니다.<br>"
-                "kofiabond 네트워크 요청 캡처 연결 후 조회가 가능합니다.",
-                tone="warning",
-            )
+        # on-show 훅에서 asyncio.create_task 로 호출되면 slot/client 컨텍스트가
+        # 없어 ui.notify 등이 실패한다. content 컨테이너 슬롯을 명시적으로 진입해
+        # 배경 task 에서도 UI 갱신이 가능하도록 한다.
+        with content:
+            progress_bar.visible = True
+            refresh_btn.props(add='disable')
             last_updated_label.content = (
-                '<span style="color:var(--warning);font-size:12px;">설정 대기</span>'
+                '<span style="color:var(--text-4);font-size:12px;">조회 중…</span>'
             )
-        except Exception as e:
-            log.error("금리 조회 오류: %s", e)
-            ui.notify(f'조회 오류: {e}', type='negative', position='top')
-            # 조회 실패해도 기존 캐시가 있으면 유지 표시
-            cached = rates_scraper.load_rates()
-            if cached:
-                _show(cached)
-            last_updated_label.content = (
-                '<span style="color:var(--danger);font-size:12px;">조회 실패</span>'
-            )
-        finally:
-            progress_bar.visible = False
-            refresh_btn.props(remove='disable')
-            pstate["loading"] = False
+            try:
+                data = await nicegui_run.io_bound(rates_scraper.get_rates, force)
+                _show(data)
+                ui.notify('금리 정보 갱신 완료', type='positive', position='top')
+            except rates_scraper.RatesNotConfiguredError as e:
+                # 실제 요청이 아직 연결되지 않은 상태 — 경고로 안내(오류 아님)
+                log.warning("금리 조회 미설정: %s", e)
+                _render_empty(
+                    "금리 조회 요청이 아직 설정되지 않았습니다.<br>"
+                    "kofiabond 네트워크 요청 캡처 연결 후 조회가 가능합니다.",
+                    tone="warning",
+                )
+                last_updated_label.content = (
+                    '<span style="color:var(--warning);font-size:12px;">설정 대기</span>'
+                )
+            except Exception as e:
+                log.error("금리 조회 오류: %s", e)
+                ui.notify(f'조회 오류: {e}', type='negative', position='top')
+                # 조회 실패해도 기존 캐시가 있으면 유지 표시
+                cached = rates_scraper.load_rates()
+                if cached:
+                    _show(cached)
+                last_updated_label.content = (
+                    '<span style="color:var(--danger);font-size:12px;">조회 실패</span>'
+                )
+            finally:
+                progress_bar.visible = False
+                refresh_btn.props(remove='disable')
+                pstate["loading"] = False
 
     refresh_btn.on_click(lambda: asyncio.create_task(_do_refresh(force=True)))
 
