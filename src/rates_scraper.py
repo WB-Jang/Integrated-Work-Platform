@@ -25,12 +25,10 @@
   },
   "market_valuation": {
       "date": "2026-07-14",                      # 시가평가 기준일
-      "companies": ["KIS채권평가", "한국자산평가", ...],   # 평가사 컬럼 순서
-      "bonds": {                                 # 채권종목 -> {평가사: 수익률(%)}
-          "국고채권(1년)": {"KIS채권평가": 3.10, "한국자산평가": 3.11, ...},
-          "국고채권(2년)": {...},
-          "국고채권(3년)": {...},
-          "국고채권(5년)": {...}
+      "source": "평가사 평균",                    # selectDay 는 평가사 평균만 제공
+      "tenors": ["1년", "2년", "3년", "5년"],      # 표시 잔존만기(열) 순서
+      "rows": {                                  # 채권종목 -> {만기: 수익률(%)}
+          "국고채권": {"1년": 3.366, "2년": 3.730, "3년": 3.897, "5년": 4.155}
       }
   }
 }
@@ -57,14 +55,23 @@ _LOCK = threading.Lock()
 # 파싱 실패 시 이 원문을 파일로 저장해 실제 응답 구조를 확인할 수 있게 한다.
 _LAST_RAW = {"svc": "", "fn": "", "text": ""}
 
-# ── 수집 대상 채권 종목(시가평가) ────────────────────────────────────────────
-# 실제 라벨은 사이트 응답을 기준으로 최종 확정. 화면 표시 순서를 정의한다.
-BOND_LABELS = [
-    "국고채권(1년)",
-    "국고채권(2년)",
-    "국고채권(3년)",
-    "국고채권(5년)",
-]
+# ── 수집 대상(시가평가) ──────────────────────────────────────────────────────
+# selectDay 응답 구조(실제 확인): 행=채권종목(typeNmMrk), 값=평가사 평균의
+# '잔존만기별' 수익률 곡선(val1..valN). 5개 평가사 개별값이 아니라 '평가사 평균'만
+# 내려온다. 우리는 국고채권의 1/2/3/5년 만기 수익률(평가사 평균)을 추출한다.
+TARGET_BOND = "국고채권"
+TARGET_TENORS = ["1년", "2년", "3년", "5년"]
+
+# KOFIA 국고채권 표준 잔존만기 16단 그리드(getHeadList 미확인 시 폴백).
+# 1년=val4, 2년=val6, 3년=val8, 5년=val10.
+_STD_KTB_TENOR_BY_VAL = {
+    1: "3개월", 2: "6개월", 3: "9개월", 4: "1년", 5: "1년6개월", 6: "2년",
+    7: "2년6개월", 8: "3년", 9: "4년", 10: "5년", 11: "7년", 12: "10년",
+    13: "15년", 14: "20년", 15: "30년", 16: "50년",
+}
+
+# 하위호환용 별칭(과거 코드/테스트에서 참조) — 표시 라벨 리스트
+BOND_LABELS = [f"{TARGET_BOND}({t})" for t in TARGET_TENORS]
 
 # ── kofiabond Proframe(WebSquare) XML 서비스 ─────────────────────────────────
 # 데이터는 https://www.kofiabond.or.kr/proframeWeb/XMLSERVICES/ 로 raw-XML POST.
@@ -364,9 +371,26 @@ def _latest_valuation_date(session: requests.Session) -> "str | None":
     return None
 
 
-def _get_company_names(session: requests.Session, ymd: str) -> "dict[str, str]":
-    """getHeadList 로 평가사 코드→명칭 매핑 조회(실패 시 폴백)."""
-    names = dict(_COMPANY_NAME_FALLBACK)
+# 잔존만기 라벨 정규화: '1년6개월'/'1.5년' 등은 순수 'N년'과 구분해야 한다.
+_TENOR_RE = re.compile(r"^\s*(\d+)\s*년\s*$")
+
+
+def _tenor_of(label: str) -> "str | None":
+    """'1년','2년','5년' 같은 순수 연 단위 라벨이면 'N년'으로 정규화, 아니면 None.
+
+    '1년6개월','3개월','1.5년','10년' 등은 순수 정수-연이 아니면 제외한다.
+    """
+    m = _TENOR_RE.match((label or "").strip())
+    return f"{int(m.group(1))}년" if m else None
+
+
+def _get_maturity_map(session: requests.Session, ymd: str) -> "dict[int, str]":
+    """getHeadList 로 val 컬럼 → 잔존만기 라벨 매핑을 구성한다.
+
+    selectDay 가 val1..valN 을 위치형(잔존만기별)으로 내려주므로, 그 컬럼의 만기
+    라벨을 헤더 호출로 얻어 target 만기(1/2/3/5년)의 위치를 확정한다.
+    구조가 확인되지 않으면 표준 그리드(_STD_KTB_TENOR_BY_VAL)로 폴백한다.
+    """
     try:
         dto = (
             "<BISBndSrtPrcDayDTO>"
@@ -376,17 +400,52 @@ def _get_company_names(session: requests.Session, ymd: str) -> "dict[str, str]":
         )
         root = _call(session, "BISBndSrtPrcSrchSO", "getHeadList", dto)
         rows = _rows(root)
-        parsed = {}
+        # 후보 1: val1..valN 필드에 만기 라벨이 그대로 들어있는 헤더 행
         for r in rows:
-            code = _pick(r, ["reportCompCd", "compCd", "cd", "code"])
-            nm = _pick(r, ["reportCompNm", "compNm", "nm", "name", "dspNm"])
-            if code and nm:
-                parsed[code] = nm
-        if parsed:
-            names.update(parsed)
+            vm = {}
+            for k, v in r.items():
+                m = re.fullmatch(r"val(\d+)", k)
+                if m and v and re.search(r"개월|년|일", v):
+                    vm[int(m.group(1))] = v.strip()
+            if vm:
+                log.info("getHeadList 만기 매핑(val 직접): %s", vm)
+                return vm
+        # 후보 2: 행마다 (순번, 라벨) 쌍으로 내려오는 구조
+        vm = {}
+        for i, r in enumerate(rows, start=1):
+            lab = _pick(r, ["trmNm", "termNm", "remainTrmNm", "nm", "name", "label", "dspNm"])
+            seq = _pick(r, ["seq", "colSeq", "sortSeq", "ord", "colNo"])
+            if lab and re.search(r"개월|년|일", lab):
+                idx = int(re.sub(r"\D", "", seq)) if seq and re.sub(r"\D", "", seq) else i
+                vm[idx] = lab.strip()
+        if vm:
+            log.info("getHeadList 만기 매핑(행별): %s", vm)
+            return vm
     except Exception as exc:
-        log.warning("getHeadList 실패(폴백 사용): %s", exc)
-    return names
+        log.warning("getHeadList 실패(표준 만기표 폴백): %s", exc)
+    return dict(_STD_KTB_TENOR_BY_VAL)
+
+
+def _target_val_positions(maturity_map: "dict[int, str]") -> "dict[str, int]":
+    """만기 매핑(val→라벨)에서 TARGET_TENORS(1/2/3/5년)의 val 위치를 역으로 찾는다.
+
+    getHeadList 라벨이 없거나 일부만 있으면 표준 그리드 위치로 보완한다.
+    """
+    tenor_to_val = {}
+    for val_idx, label in maturity_map.items():
+        t = _tenor_of(label)
+        if t and t not in tenor_to_val:
+            tenor_to_val[t] = val_idx
+    # 표준 그리드 보완
+    std = {}
+    for val_idx, label in _STD_KTB_TENOR_BY_VAL.items():
+        t = _tenor_of(label)
+        if t:
+            std[t] = val_idx
+    out = {}
+    for t in TARGET_TENORS:
+        out[t] = tenor_to_val.get(t, std.get(t))
+    return out
 
 
 def _fetch_cd91(session: requests.Session, ymd: str) -> dict:
@@ -425,12 +484,16 @@ def _fetch_cd91(session: requests.Session, ymd: str) -> dict:
 
 
 def _fetch_valuation(session: requests.Session, ymd: str) -> dict:
-    """채권시가평가수익률(국고채, 5개 평가사) 조회.
+    """채권시가평가수익률(국고채권, 평가사 평균) 조회 — 잔존만기 1/2/3/5년.
 
-    반환: {'date','companies','bonds': {라벨: {평가사: 수익률}}}
+    selectDay 응답: 행=채권종목(typeNmMrk), 값=평가사 평균의 잔존만기별 수익률
+    곡선(val1..valN). 국고채권 행에서 target 만기의 val 위치 값을 추출한다.
+
+    반환: {'date','source','tenors': [...], 'rows': {'국고채권': {'1년': v, ...}}}
     """
-    company_names = _get_company_names(session, ymd)
-    companies = [company_names.get(c, c) for c in _VAL_COMPANY_CODES]
+    # 잔존만기 → val 위치(getHeadList 우선, 표준 그리드 폴백)
+    maturity_map = _get_maturity_map(session, ymd)
+    pos = _target_val_positions(maturity_map)  # {'1년': 4, '2년': 6, ...}
 
     val_slots = "".join(
         f"<val{i+1}>{code}</val{i+1}>" for i, code in enumerate(_VAL_COMPANY_CODES)
@@ -452,31 +515,43 @@ def _fetch_valuation(session: requests.Session, ymd: str) -> dict:
             + (f"원문을 {dbg} 에 저장했습니다." if dbg else "")
         )
 
-    # 각 행: 채권종목명 + 5개 평가사 수익률.
-    # 종목명은 위치형 grid(val1..valN)여도 견고하게 뽑되, 평가사 컬럼 매핑은
-    # 응답 구조 확정 전까지 잘못된 숫자를 표시하지 않도록 val1..val5 직접 매핑만
-    # 사용한다(모호한 소수 스캐빈징 금지 — 금액 오표시 방지).
-    bonds: "dict[str, dict]" = {}
+    # 국고채권(typeNmMrk) 행을 찾는다. typeNmMrk 가 없으면 종목명 폴백.
+    target_row = None
     for r in rows:
-        label = _val_label(r)
-        if not label:
-            continue
-        per_company = {}
-        for i, comp_nm in enumerate(companies):
-            per_company[comp_nm] = _to_float(r.get(f"val{i+1}"))
-        if any(v is not None for v in per_company.values()):
-            bonds[label] = per_company
+        name = _pick(r, ["typeNmMrk"]) or _val_label(r) or ""
+        if TARGET_BOND in name:
+            target_row = r
+            break
 
-    if not bonds:
+    if target_row is None:
         dbg = _dump_raw("valuation")
         raise RuntimeError(
-            "시가평가 수익률을 응답에서 추출하지 못했습니다. "
+            f"'{TARGET_BOND}' 행을 시가평가 응답에서 찾지 못했습니다. "
             f"행 {len(rows)}개, 값 예시: {_sample_rows(rows)}. "
-            + (f"전체 응답 원문을 {dbg} 에 저장했습니다 — 이 파일 내용을 공유해 주세요."
+            + (f"원문을 {dbg} 에 저장했습니다." if dbg else "")
+        )
+
+    tenor_rates = {}
+    for tenor in TARGET_TENORS:
+        val_idx = pos.get(tenor)
+        tenor_rates[tenor] = _to_float(target_row.get(f"val{val_idx}")) if val_idx else None
+
+    if not any(v is not None for v in tenor_rates.values()):
+        dbg = _dump_raw("valuation")
+        raise RuntimeError(
+            f"'{TARGET_BOND}' 잔존만기 수익률을 추출하지 못했습니다(만기 위치 {pos}). "
+            + (f"원문을 {dbg} 에 저장했습니다 — getHeadList 응답도 공유해 주세요."
                if dbg else "")
         )
 
-    return {"date": _fmt_date(ymd), "companies": companies, "bonds": bonds}
+    return {
+        "date": _fmt_date(ymd),
+        "source": "평가사 평균",
+        "tenors": list(TARGET_TENORS),
+        "rows": {TARGET_BOND: tenor_rates},
+        # 진단/참고용: 사용된 만기→val 위치와 국고채권 전체 곡선
+        "tenor_positions": pos,
+    }
 
 
 # ── 조회 오케스트레이션 ──────────────────────────────────────────────────────
