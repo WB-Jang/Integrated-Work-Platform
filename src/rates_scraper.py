@@ -49,11 +49,13 @@ from logger import get_logger
 log = get_logger("rates_scraper")
 
 # ── 저장 경로(루트 레벨 JSON) ────────────────────────────────────────────────
-_DATA_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    'interest_rates.json'
-)
+_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DATA_PATH = os.path.join(_ROOT_DIR, 'interest_rates.json')
 _LOCK = threading.Lock()
+
+# 마지막 XMLSERVICES 응답 원문(진단용). _call 이 매 호출마다 갱신한다.
+# 파싱 실패 시 이 원문을 파일로 저장해 실제 응답 구조를 확인할 수 있게 한다.
+_LAST_RAW = {"svc": "", "fn": "", "text": ""}
 
 # ── 수집 대상 채권 종목(시가평가) ────────────────────────────────────────────
 # 실제 라벨은 사이트 응답을 기준으로 최종 확정. 화면 표시 순서를 정의한다.
@@ -182,17 +184,48 @@ def _call(session: requests.Session, svc: str, fn: str, dto_xml: str) -> ET.Elem
     body = _build_message(svc, fn, dto_xml).encode("utf-8")
     resp = session.post(_ENDPOINT, data=body, timeout=15)
     resp.raise_for_status()
+    # 진단용 원문 보관(디코딩은 관용적으로)
+    try:
+        raw_text = resp.content.decode("utf-8")
+    except UnicodeDecodeError:
+        raw_text = resp.content.decode("euc-kr", errors="replace")
+    _LAST_RAW.update(svc=svc, fn=fn, text=raw_text)
     # ElementTree 는 XML 선언의 encoding 을 존중하므로 bytes 그대로 전달
     try:
         return ET.fromstring(resp.content)
     except ET.ParseError as exc:
         # euc-kr 등 선언과 실제 인코딩 불일치 시 폴백
-        text = resp.content.decode("euc-kr", errors="replace")
-        text = re.sub(r'encoding="[^"]*"', 'encoding="utf-8"', text, count=1)
+        text = re.sub(r'encoding="[^"]*"', 'encoding="utf-8"', raw_text, count=1)
         try:
             return ET.fromstring(text)
         except ET.ParseError:
             raise RuntimeError(f"응답 XML 파싱 실패: {exc}") from exc
+
+
+def _dump_raw(tag: str) -> str:
+    """마지막 XMLSERVICES 응답 원문을 루트에 파일로 저장하고 경로를 반환.
+
+    파싱/필드매핑 실패 시 실제 응답 구조를 사용자가 확인/공유할 수 있게 한다.
+    """
+    try:
+        svc = _LAST_RAW.get("svc") or "unknown"
+        fn = _LAST_RAW.get("fn") or "unknown"
+        path = os.path.join(_ROOT_DIR, f"rates_debug_{tag}_{svc}_{fn}.xml")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(_LAST_RAW.get("text") or "")
+        return path
+    except Exception as exc:
+        log.warning("응답 원문 저장 실패: %s", exc)
+        return ""
+
+
+def _sample_rows(rows: "list[dict]", n: int = 5) -> str:
+    """진단용: 비어있지 않은 상위 n개 행을 '키=값' 형태 문자열로 요약."""
+    out = []
+    for r in rows[:n]:
+        pairs = [f"{k}={v}" for k, v in r.items() if v not in (None, "")]
+        out.append("{ " + ", ".join(pairs[:20]) + (" ..." if len(pairs) > 20 else "") + " }")
+    return " | ".join(out) if out else "(비어있는 행만 존재)"
 
 
 def _rows(root: ET.Element, dto_suffix: str = "DTO") -> "list[dict]":
@@ -225,7 +258,8 @@ def _rows(root: ET.Element, dto_suffix: str = "DTO") -> "list[dict]":
             if ctag.startswith('dbio_'):   # DBIO 메타데이터 필드 제외
                 continue
             row[ctag] = (child.text or "").strip()
-        if row:
+        # 값이 하나라도 있는 행만 채택(val1..valN 이 전부 빈 격자 템플릿 행 제외)
+        if row and any(v not in (None, "") for v in row.values()):
             out.append(row)
     return out
 
@@ -241,6 +275,23 @@ def _to_float(v) -> "float | None":
         return float(s)
     except ValueError:
         return None
+
+
+def _first_rate_value(d: dict) -> "float | None":
+    """dict 값들 중 금리로 그럴듯한 첫 실수를 반환.
+
+    위치형 grid(val1..valN)에서 금리 필드명을 특정하지 못할 때의 폴백.
+    - 8자리 날짜(YYYYMMDD)·코드성 숫자는 제외
+    - 0 < x < 30 (%) 범위의 소수만 채택(국내 채권금리 현실 범위)
+    """
+    for v in d.values():
+        s = str(v).strip()
+        if not s or re.fullmatch(r"\d{8}", s):   # 날짜(YYYYMMDD) 제외
+            continue
+        f = _to_float(s)
+        if f is not None and 0.0 < f < 30.0 and "." in s.replace(",", ""):
+            return f
+    return None
 
 
 def _pick(d: dict, candidates: "list[str]") -> "str | None":
@@ -324,21 +375,32 @@ def _fetch_cd91(session: requests.Session, ymd: str) -> dict:
     root = _call(session, "BISLastAskPrcROPSrchSO", "listDay", dto)
     rows = _rows(root)
     if not rows:
-        raise RuntimeError("CD91 응답에 데이터 행이 없습니다.")
+        dbg = _dump_raw("cd91")
+        raise RuntimeError(
+            f"CD91({_fmt_date(ymd)}) 응답에 데이터 행이 없습니다. "
+            "해당 일자가 영업일이 아니거나 아직 고시 전일 수 있습니다. "
+            + (f"원문을 {dbg} 에 저장했습니다." if dbg else "")
+        )
 
     # 종목명에 'CD'와 '91'이 포함된 행을 찾는다.
+    # (필드명이 위치형 val1..valN 이어도 값 전체를 훑어 CD/91 을 매칭한다.)
     for r in rows:
-        name = _pick(r, _CD_NAME_FIELDS) or " ".join(r.values())
-        if "CD" in name.upper() and "91" in name:
+        haystack = " ".join(str(v) for v in r.values())
+        if "CD" in haystack.upper() and "91" in haystack:
+            # 이름 후보/코드성 필드를 제외한 첫 실수 값을 금리로 채택
             rate = _to_float(_pick(r, _CD_RATE_FIELDS))
+            if rate is None:
+                rate = _first_rate_value(r)
             if rate is not None:
                 return {"rate": rate, "date": _fmt_date(ymd)}
 
-    # 못 찾으면 진단용으로 발견된 필드 노출
-    sample = rows[0] if rows else {}
+    # 못 찾으면 진단용으로 원문 저장 + 실제 값 샘플 노출
+    dbg = _dump_raw("cd91")
     raise RuntimeError(
         "CD91(91일) 행을 응답에서 찾지 못했습니다. "
-        f"응답 필드 예시: {list(sample.keys())}"
+        f"행 {len(rows)}개, 값 예시: {_sample_rows(rows)}. "
+        + (f"전체 응답 원문을 {dbg} 에 저장했습니다 — 이 파일 내용을 공유해 주세요."
+           if dbg else "")
     )
 
 
@@ -364,7 +426,11 @@ def _fetch_valuation(session: requests.Session, ymd: str) -> dict:
     root = _call(session, "BISBndSrtPrcSrchSO", "selectDay", dto)
     rows = _rows(root)
     if not rows:
-        raise RuntimeError("시가평가 응답에 데이터 행이 없습니다.")
+        dbg = _dump_raw("valuation")
+        raise RuntimeError(
+            f"시가평가({_fmt_date(ymd)}) 응답에 데이터 행이 없습니다. "
+            + (f"원문을 {dbg} 에 저장했습니다." if dbg else "")
+        )
 
     # 각 행: 채권종목명 + val1..val5(5개 평가사 수익률)
     bonds: "dict[str, dict]" = {}
@@ -380,10 +446,12 @@ def _fetch_valuation(session: requests.Session, ymd: str) -> dict:
             bonds[label] = per_company
 
     if not bonds:
-        sample = rows[0] if rows else {}
+        dbg = _dump_raw("valuation")
         raise RuntimeError(
             "시가평가 수익률을 응답에서 추출하지 못했습니다. "
-            f"응답 필드 예시: {list(sample.keys())}"
+            f"행 {len(rows)}개, 값 예시: {_sample_rows(rows)}. "
+            + (f"전체 응답 원문을 {dbg} 에 저장했습니다 — 이 파일 내용을 공유해 주세요."
+               if dbg else "")
         )
 
     return {"date": _fmt_date(ymd), "companies": companies, "bonds": bonds}
