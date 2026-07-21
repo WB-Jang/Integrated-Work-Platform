@@ -157,7 +157,7 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
         )
 
     def _render_valuation(mv: "dict | None", err: "str | None" = None) -> str:
-        if not mv or not mv.get("bonds"):
+        if not mv or not mv.get("rows"):
             body = (
                 '채권시가평가수익률 데이터 없음'
                 if not err else
@@ -172,51 +172,49 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
                 'line-height:1.7;">'
                 f'{body}</div>'
             )
-        companies = mv.get("companies") or []
-        bonds = mv.get("bonds") or {}
+        tenors = mv.get("tenors") or []
+        rows_data = mv.get("rows") or {}
         date = _html.escape(str(mv.get("date") or ""))
+        source = _html.escape(str(mv.get("source") or ""))
 
         th_bond = (
             '<th style="text-align:left;padding:9px 12px;font-size:11px;'
             'color:var(--text-3);font-weight:600;border-bottom:1px solid var(--border);'
             'position:sticky;top:0;background:var(--bg);">채권종목</th>'
         )
-        th_companies = ''.join(
+        th_tenors = ''.join(
             '<th style="text-align:right;padding:9px 12px;font-size:11px;'
             'color:var(--text-3);font-weight:600;border-bottom:1px solid var(--border);'
             'position:sticky;top:0;background:var(--bg);white-space:nowrap;">'
-            f'{_html.escape(str(c))}</th>'
-            for c in companies
+            f'{_html.escape(str(t))}</th>'
+            for t in tenors
         )
-        thead = f'<tr>{th_bond}{th_companies}</tr>'
-
-        # 행 순서: BOND_LABELS 우선, 그 외 응답에 있는 나머지 종목 이어붙임
-        ordered_labels = [b for b in rates_scraper.BOND_LABELS if b in bonds]
-        ordered_labels += [b for b in bonds if b not in ordered_labels]
+        thead = f'<tr>{th_bond}{th_tenors}</tr>'
 
         rows = []
-        for label in ordered_labels:
-            row_data = bonds.get(label, {})
+        for bond_name, tenor_rates in rows_data.items():
             cells = [
                 '<td style="text-align:left;padding:9px 12px;font-size:12.5px;'
                 'color:var(--text);border-bottom:1px solid var(--border);'
-                f'white-space:nowrap;">{_html.escape(str(label))}</td>'
+                f'white-space:nowrap;">{_html.escape(str(bond_name))}</td>'
             ]
-            for c in companies:
+            for t in tenors:
                 cells.append(
                     '<td style="text-align:right;padding:9px 12px;font-size:12.5px;'
                     'color:var(--text);border-bottom:1px solid var(--border);'
                     'font-variant-numeric:tabular-nums;">'
-                    f'{_fmt_rate(row_data.get(c))}</td>'
+                    f'{_fmt_rate(tenor_rates.get(t))}</td>'
                 )
             rows.append('<tr>' + ''.join(cells) + '</tr>')
 
+        src_note = f' · {source}' if source else ''
         caption = (
             '<div style="display:flex;align-items:baseline;justify-content:space-between;'
             'margin-bottom:10px;">'
             '<div style="font-size:14px;font-weight:600;color:var(--text);">'
-            '채권시가평가수익률 (단위: %)</div>'
-            f'<div style="font-size:11.5px;color:var(--text-4);">기준일 {date}</div>'
+            '채권시가평가수익률 (잔존만기별, 단위: %)</div>'
+            f'<div style="font-size:11.5px;color:var(--text-4);">'
+            f'기준일 {date}{src_note}</div>'
             '</div>'
         )
         table = (
