@@ -458,8 +458,12 @@ def _fetch_valuation(session: requests.Session, ymd: str) -> dict:
 
 
 # ── 조회 오케스트레이션 ──────────────────────────────────────────────────────
-def fetch_rates() -> dict:
+def fetch_rates(date_ymd: "str | None" = None) -> dict:
     """사이트에서 CD91 + 시가평가수익률을 조회해 저장 스키마 dict 로 반환.
+
+    date_ymd 를 지정하면(YYYYMMDD) 해당 일자를 CD91·시가평가 조회 기준일로 사용한다.
+    지정하지 않으면 시가평가 최신 고시일(getExistMaxDate)을 우선 사용하고,
+    실패 시 오늘(KST)로 폴백한다.
 
     두 항목은 독립적으로 조회하며, 한쪽이 실패해도 나머지는 채운다.
     (부분 성공 시 실패 사유는 로그로 남기고 해당 항목은 None.)
@@ -468,8 +472,12 @@ def fetch_rates() -> dict:
     errors = []
     session = _new_session()
 
-    # 시가평가 기준일: getExistMaxDate 우선, 실패 시 오늘(KST)
-    val_ymd = _latest_valuation_date(session) or _yyyymmdd(today_str())
+    if date_ymd:
+        # 사용자가 조회일을 명시 → 해당 일자를 그대로 사용(자동 최신일 탐색 생략)
+        val_ymd = re.sub(r"\D", "", date_ymd)[:8]
+    else:
+        # 시가평가 기준일: getExistMaxDate 우선, 실패 시 오늘(KST)
+        val_ymd = _latest_valuation_date(session) or _yyyymmdd(today_str())
 
     cd_91 = None
     try:
@@ -506,19 +514,19 @@ def fetch_rates() -> dict:
     }
 
 
-def get_rates(force_refresh: bool = False) -> dict:
-    """캐시(오늘자)면 그대로, 아니면 조회 후 저장하여 반환.
+def get_rates(force_refresh: bool = False, date_ymd: "str | None" = None) -> dict:
+    """요청 일자의 데이터가 캐시에 있으면 그대로, 아니면 조회 후 저장하여 반환.
 
+    - date_ymd(YYYYMMDD): 조회 기준일. None 이면 오늘(KST).
     - force_refresh=True: 캐시 무시하고 무조건 재조회.
     - 조회 실패 시: 예외를 그대로 전파(호출부에서 notify 처리).
-      단, 조회는 실패했지만 이전 캐시가 있으면 호출부가 이를 활용할 수 있도록
-      예외에 담지 않고 여기서는 순수 조회 결과만 다룬다.
     """
+    want = _fmt_date(re.sub(r"\D", "", date_ymd)[:8]) if date_ymd else today_str()
     if not force_refresh:
         cached = load_rates()
-        if cached and not is_stale(cached):
+        if cached and cached.get("date") == want:
             return cached
 
-    data = fetch_rates()
+    data = fetch_rates(date_ymd=date_ymd)
     save_rates(data)
     return data
