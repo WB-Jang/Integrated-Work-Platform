@@ -156,12 +156,21 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
             '</div>'
         )
 
-    def _render_valuation(mv: "dict | None") -> str:
+    def _render_valuation(mv: "dict | None", err: "str | None" = None) -> str:
         if not mv or not mv.get("bonds"):
+            body = (
+                '채권시가평가수익률 데이터 없음'
+                if not err else
+                '채권시가평가수익률을 불러오지 못했습니다.<br>'
+                '<span style="color:var(--text-4);font-size:11.5px;">'
+                f'{_html.escape(str(err))}</span>'
+            )
+            tone = 'var(--warning)' if err else 'var(--text-4)'
             return (
                 '<div style="border:1px solid var(--border);border-radius:12px;'
-                'padding:24px;color:var(--text-4);font-size:13px;text-align:center;">'
-                '채권시가평가수익률 데이터 없음</div>'
+                f'padding:24px;color:{tone};font-size:13px;text-align:center;'
+                'line-height:1.7;">'
+                f'{body}</div>'
             )
         companies = mv.get("companies") or []
         bonds = mv.get("bonds") or {}
@@ -229,8 +238,11 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
                 + _render_cd91(data.get("cd_91")) +
                 '</div>'
             )
-            # 시가평가 매트릭스
-            ui.html(_render_valuation(data.get("market_valuation")))
+            # 시가평가 매트릭스 (실패 시 원인/진단 노출)
+            ui.html(_render_valuation(
+                data.get("market_valuation"),
+                data.get("market_valuation_error"),
+            ))
             if fetched:
                 ui.html(
                     f'<div style="font-size:11px;color:var(--text-4);margin-top:14px;">'
