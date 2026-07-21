@@ -32,7 +32,14 @@ _CATEGORY_QUERIES = {
     "금융회사 경영공시":   "금융회사 경영공시",
 }
 
-# ── 네이버 뉴스 검색 API ──────────────────────────────────────────────────────
+# ── 금융감독원 보도·알림 게시판 (1차 소스) ───────────────────────────────────
+# menuNo=200747(보도·알림) 하위 '보도자료' 게시판. 실데이터(감독원 원문)를 우선
+# 사용하고, 접속·파싱 실패 시 네이버 뉴스로 자동 폴백한다.
+_FSS_BASE = "https://www.fss.or.kr"
+_FSS_PRESS_LIST = "https://www.fss.or.kr/fss/bbs/B0000188/list.do?menuNo=200218"
+_FSS_FEED_LABEL = "금융감독원 보도·알림"
+
+# ── 네이버 뉴스 검색 API (폴백 소스) ─────────────────────────────────────────
 _NAVER_NEWS_URL = "https://openapi.naver.com/v1/search/news.json"
 _REQUESTS_HEADERS = {"User-Agent": "Mozilla/5.0"}
 
@@ -95,7 +102,7 @@ def _fetch_naver_news(query: str, count: int = 10) -> list[dict]:
 
 
 def _fetch_all_categories(api_key: str = None, count: int = 10) -> dict[str, list[dict]]:
-    """4개 카테고리를 네이버 뉴스 검색으로 수집한다(원문 링크가 유효한 실제 기사).
+    """4개 카테고리를 네이버 뉴스 검색으로 수집한다(폴백 경로).
 
     api_key 인자는 호출부 호환을 위해 유지하나 사용하지 않는다(네이버 자격증명은
     NAVER_CLIENT_ID/SECRET 환경변수 사용).
@@ -106,6 +113,77 @@ def _fetch_all_categories(api_key: str = None, count: int = 10) -> dict[str, lis
         log.info("네이버 뉴스 '%s': %d건", label, len(items))
         results[label] = items
     return results
+
+
+# ── FSS 보도자료 게시판 파싱 ──────────────────────────────────────────────────
+_FSS_DATE_RE = re.compile(r"(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})")
+
+
+def _abs_fss_url(href: str) -> str:
+    """FSS 상대경로(/fss/...)를 절대 URL로 변환."""
+    href = (href or "").strip().replace("&amp;", "&")
+    if not href:
+        return ""
+    if href.startswith(("http://", "https://")):
+        return href
+    if href.startswith("/"):
+        return _FSS_BASE + href
+    return _FSS_BASE + "/" + href
+
+
+def _fetch_fss_press(count: int = 10) -> list[dict]:
+    """금융감독원 보도자료 게시판(B0000188) 목록을 파싱해 최신 게시물을 반환.
+
+    게시판 HTML의 <tr> 행마다 상세(view.do?...nttId=...) 링크·제목·등록일을 추출한다.
+    접속·파싱 실패 또는 결과 없음 시 빈 리스트(→ 네이버 폴백).
+    """
+    try:
+        resp = requests.get(_FSS_PRESS_LIST, headers=_REQUESTS_HEADERS, timeout=10)
+        resp.raise_for_status()
+        text = resp.text
+    except Exception as exc:
+        log.warning("FSS 보도자료 목록 조회 실패: %s", exc)
+        return []
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    # 각 행(<tr> … </tr>) 안에서 view 링크 + 날짜를 함께 뽑는다.
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", text, re.S | re.I):
+        m = re.search(
+            r'href="([^"]*view\.do[^"]*nttId=\d+[^"]*)"[^>]*>(.*?)</a>',
+            tr, re.S | re.I,
+        )
+        if not m:
+            continue
+        url = _abs_fss_url(m.group(1))
+        title = _strip_html(m.group(2))
+        if not (url and title) or url in seen:
+            continue
+        seen.add(url)
+        dm = _FSS_DATE_RE.search(tr)
+        reg = f"{dm.group(1)}-{int(dm.group(2)):02d}-{int(dm.group(3)):02d}" if dm else ""
+        out.append({
+            "title": title,
+            "url": url,
+            "regDate": reg,
+            "content": "",
+            "_source": "금융감독원",
+        })
+        if len(out) >= count:
+            break
+    log.info("FSS 보도자료 %d건 파싱", len(out))
+    return out
+
+
+def _fetch_dashboard_feed(api_key: str = None, count: int = 10) -> dict[str, list[dict]]:
+    """대시보드용 단일 피드. 1차: FSS 보도·알림 원문, 실패 시 네이버 뉴스로 폴백."""
+    items = _fetch_fss_press(count)
+    if items:
+        return {_FSS_FEED_LABEL: items}
+    # 폴백 — 네이버 뉴스(감독원 보도자료 질의)
+    naver = _fetch_naver_news("금융감독원 보도자료", count)
+    log.info("FSS 원문 없음 → 네이버 폴백 %d건", len(naver))
+    return {_FSS_FEED_LABEL: naver}
 
 
 def build_fss_dashboard_panel(config: dict):
@@ -120,12 +198,12 @@ def build_fss_dashboard_panel(config: dict):
             '<div class="titles">'
             '<div class="page-title">Risk DashBoard</div>'
             '<div class="page-subtitle">'
-            '네이버 뉴스 검색 기반 — 보도자료·사고·검사·경영공시 관련 기사를 한눈에 확인합니다.'
+            '금융감독원 보도·알림 원문 — 최신 보도자료를 직접 조회합니다 (접속 실패 시 네이버 뉴스로 폴백).'
             '</div>'
             '</div>'
         )
 
-    # ── 네이버 검색 자격증명 없을 때 경고 배너 ────────────────────────────
+    # ── 폴백(네이버) 자격증명 안내 배너 ───────────────────────────────────
     _naver_ready = bool(
         os.environ.get("NAVER_CLIENT_ID", "").strip()
         and os.environ.get("NAVER_CLIENT_SECRET", "").strip()
@@ -137,9 +215,9 @@ def build_fss_dashboard_panel(config: dict):
             'font-size:13px;color:var(--warning);'
         ):
             ui.html(
-                '<b>⚠ 네이버 검색 자격증명 미설정</b> — '
-                '<code>NAVER_CLIENT_ID</code> / <code>NAVER_CLIENT_SECRET</code> 환경변수(HF Spaces Secrets)를 '
-                '설정하면 뉴스 기사를 불러옵니다.'
+                '<b>ℹ 폴백(네이버 검색) 자격증명 미설정</b> — 기본은 감독원 원문을 사용합니다. '
+                '<code>NAVER_CLIENT_ID</code> / <code>NAVER_CLIENT_SECRET</code>(HF Spaces Secrets)를 '
+                '설정하면 감독원 접속 실패 시 네이버 뉴스로 대체됩니다.'
             )
 
     # ── 컨트롤 바 ────────────────────────────────────────────────────────
@@ -148,16 +226,15 @@ def build_fss_dashboard_panel(config: dict):
         'border-bottom:1px solid var(--border);flex-shrink:0;'
     ):
         count_input = ui.number(
-            label='카테고리별 조회 건수', value=5, min=1, max=20, step=1,
-        ).props('outlined dense hide-bottom-space').style('width:180px;')
+            label='조회 건수', value=10, min=1, max=30, step=1,
+        ).props('outlined dense hide-bottom-space').style('width:150px;')
 
         refresh_btn = ui.button('데이터 조회').classes('btn-primary-mono')
         last_updated_label = ui.html('<span style="color:var(--text-4);font-size:12px;"></span>')
 
-    # ── 대시보드 그리드 ──────────────────────────────────────────────────
+    # ── 대시보드 (단일 피드) ──────────────────────────────────────────────
     dashboard_grid = ui.element('div').style(
-        'display:grid;grid-template-columns:1fr 1fr;gap:16px;'
-        'padding:20px 32px;flex:1;overflow-y:auto;'
+        'display:block;padding:20px 32px;flex:1;overflow-y:auto;'
     )
 
     progress_bar = ui.linear_progress().props('indeterminate').classes('w-full')
@@ -176,7 +253,8 @@ def build_fss_dashboard_panel(config: dict):
         if u.startswith(("http://", "https://")):
             return u
         if u.startswith("/"):
-            return ""
+            # FSS 상대경로는 감독원 도메인으로 절대화, 그 외는 링크 생략
+            return _FSS_BASE + u if u.startswith("/fss") else ""
         return "https://" + u
 
     def _render_item(item: dict):
@@ -217,30 +295,23 @@ def build_fss_dashboard_panel(config: dict):
     def _render_dashboard(data: dict[str, list[dict]]):
         dashboard_grid.clear()
         with dashboard_grid:
-            icon_map = {
-                "제재·조치 현황":    ("gavel",           "#ef4444"),
-                "금융사고 공시":    ("warning",          "#f59e0b"),
-                "검사·감독 결과":   ("manage_search",    "#3b82f6"),
-                "금융회사 경영공시": ("domain",           "#22c55e"),
-            }
             for category, items in data.items():
-                icon_name, icon_color = icon_map.get(category, ("info", "var(--text-3)"))
                 with ui.element('div').style(
                     'background:var(--bg);border:1px solid var(--border);'
                     'border-radius:12px;padding:16px;display:flex;flex-direction:column;'
                     'min-height:280px;'
                 ):
-                    # 카드 헤더
-                    is_naver = items and items[0].get("_source") == "네이버뉴스"
+                    # 카드 헤더 — 실제 사용된 소스(감독원/네이버뉴스) 표시
+                    src = items[0].get("_source") if items else ""
                     source_note = (
-                        '<span style="font-size:10.5px;color:var(--text-4);margin-left:6px;">'
-                        '네이버뉴스</span>'
-                    ) if is_naver else ""
+                        f'<span style="font-size:10.5px;color:var(--text-4);margin-left:6px;">'
+                        f'{_html.escape(src)}</span>'
+                    ) if src else ""
                     ui.html(
                         f'<div style="display:flex;align-items:center;gap:8px;'
                         f'margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border);">'
                         f'<span class="material-symbols-outlined" '
-                        f'style="font-size:18px;color:{icon_color};">{icon_name}</span>'
+                        f'style="font-size:18px;color:#3b82f6;">campaign</span>'
                         f'<span style="font-size:14px;font-weight:600;color:var(--text);">'
                         f'{_html.escape(category)}</span>'
                         f'{source_note}'
@@ -252,7 +323,7 @@ def build_fss_dashboard_panel(config: dict):
                     if not items:
                         ui.html(
                             '<div style="text-align:center;color:var(--text-4);font-size:12.5px;'
-                            'padding:20px 0;">데이터 없음 (네이버 뉴스 검색 결과 없음)</div>'
+                            'padding:20px 0;">데이터 없음 (감독원 접속·네이버 폴백 모두 실패)</div>'
                         )
                     else:
                         for item in items:
@@ -260,7 +331,7 @@ def build_fss_dashboard_panel(config: dict):
 
     # ── 조회 핸들러 ──────────────────────────────────────────────────────
     async def refresh_dashboard():
-        count = int(count_input.value or 5)
+        count = int(count_input.value or 10)
         progress_bar.visible = True
         refresh_btn.props(add='disable')
         last_updated_label.content = (
@@ -268,7 +339,7 @@ def build_fss_dashboard_panel(config: dict):
         )
 
         try:
-            data = await nicegui_run.io_bound(_fetch_all_categories, fss_api_key, count)
+            data = await nicegui_run.io_bound(_fetch_dashboard_feed, fss_api_key, count)
 
             state["data"] = data
             state["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -290,27 +361,18 @@ def build_fss_dashboard_panel(config: dict):
 
     refresh_btn.on_click(refresh_dashboard)
 
-    # 초기 빈 그리드 렌더링
+    # 초기 빈 그리드 렌더링 (단일 피드 안내)
     with dashboard_grid:
-        for category in _CATEGORY_QUERIES:
-            icon_map = {
-                "제재·조치 현황":    ("gavel",           "#ef4444"),
-                "금융사고 공시":    ("warning",          "#f59e0b"),
-                "검사·감독 결과":   ("manage_search",    "#3b82f6"),
-                "금융회사 경영공시": ("domain",           "#22c55e"),
-            }
-            icon_name, icon_color = icon_map.get(category, ("info", "var(--text-3)"))
-            with ui.element('div').style(
-                'background:var(--bg);border:1px solid var(--border);'
-                'border-radius:12px;padding:16px;min-height:240px;'
-                'display:flex;flex-direction:column;align-items:center;justify-content:center;'
-            ):
-                ui.html(
-                    f'<span class="material-symbols-outlined" '
-                    f'style="font-size:32px;color:var(--border-strong);margin-bottom:10px;">'
-                    f'{icon_name}</span>'
-                    f'<div style="font-size:13px;font-weight:600;color:var(--text-3);">'
-                    f'{_html.escape(category)}</div>'
-                    f'<div style="font-size:12px;color:var(--text-4);margin-top:4px;">'
-                    f'조회 버튼을 눌러 데이터를 불러오세요</div>'
-                )
+        with ui.element('div').style(
+            'background:var(--bg);border:1px solid var(--border);'
+            'border-radius:12px;padding:16px;min-height:240px;'
+            'display:flex;flex-direction:column;align-items:center;justify-content:center;'
+        ):
+            ui.html(
+                '<span class="material-symbols-outlined" '
+                'style="font-size:32px;color:var(--border-strong);margin-bottom:10px;">campaign</span>'
+                f'<div style="font-size:13px;font-weight:600;color:var(--text-3);">'
+                f'{_html.escape(_FSS_FEED_LABEL)}</div>'
+                '<div style="font-size:12px;color:var(--text-4);margin-top:4px;">'
+                '조회 버튼을 눌러 감독원 보도·알림을 불러오세요</div>'
+            )

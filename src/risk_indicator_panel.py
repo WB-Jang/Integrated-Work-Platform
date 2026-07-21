@@ -195,9 +195,94 @@ def _indicator_card_html(ind: dict, value: float, prev: float | None = None) -> 
     )
 
 
+# ─── DIVE(금융감독원 금융통계 시각화) 임베드 ────────────────────────────────
+# diva.fss.or.kr = FISIS(금융통계정보시스템)의 시각화 프론트엔드. 원천 데이터는
+# FISIS OpenAPI(fisis.fss.or.kr/openapi)로 공개되나, 사용자 요청에 따라 DIVE 화면을
+# 그대로 임베드해 감독원 데이터를 직접 조회하도록 한다.
+_DIVE_URL = "https://diva.fss.or.kr/"
+
+
+def _build_dive_embed():
+    """DIVE 원본 화면을 iframe으로 임베드. 정부 사이트가 X-Frame-Options로 임베드를
+    제한할 수 있으므로 '새 창 열기' 링크를 항상 함께 노출한다."""
+    with ui.element('div').classes('page-head'):
+        ui.html(
+            '<div class="titles">'
+            '<div class="page-title">Risk Indicator Dashboard</div>'
+            '<div class="page-subtitle">금융감독원 DIVE(금융통계 시각화)에서 은행 재무·건전성 데이터를 직접 조회합니다.</div>'
+            '</div>'
+        )
+
+    with ui.element('div').style(
+        'display:flex;align-items:center;gap:12px;margin:-4px 0 10px;flex-wrap:wrap;'
+    ):
+        ui.html(
+            '<span style="font-size:11.5px;color:var(--text-4);">'
+            '화면이 비어 보이면 감독원 사이트가 임베드를 제한한 것입니다 — 오른쪽 버튼으로 새 창에서 열어주세요.</span>'
+        )
+        ui.link('DIVE 새 창에서 열기 ↗', target=_DIVE_URL, new_tab=True).style(
+            'font-size:12px;font-weight:600;color:var(--text);text-decoration:none;'
+            'border:1px solid var(--border);border-radius:6px;padding:5px 12px;'
+        )
+
+    ui.html(
+        f'<iframe src="{_DIVE_URL}" title="FSS DIVE" '
+        f'referrerpolicy="no-referrer" '
+        f'style="width:100%;height:calc(100vh - 230px);min-height:560px;'
+        f'border:1px solid var(--border);border-radius:8px;background:#fff;"></iframe>'
+    )
+
+
 # ─── 메인 빌더 ───────────────────────────────────────────────────────────────
 def build_risk_indicator_panel(config: dict):
-    """Risk Indicator Dashboard 패널 빌더."""
+    """Risk Indicator Dashboard 패널 — DIVE 임베드(기본) + 참고 지표(샘플) 보조 뷰."""
+    # 상단 뷰 전환기: DIVE 원본(기본) / 참고 지표(샘플)
+    with ui.element('div').style(
+        'display:flex;gap:4px;border-bottom:1px solid var(--border);'
+        'margin-bottom:14px;padding-top:4px;'
+    ):
+        view_state = ['dive']  # 'dive' | 'native'
+        view_btns: dict = {}
+        for k, label in [('dive', 'DIVE 원본'), ('native', '참고 지표 (샘플)')]:
+            b = ui.element('button').style('cursor:pointer;')
+            with b:
+                ui.html(f'<span>{label}</span>')
+            view_btns[k] = b
+
+    dive_container = ui.element('div')
+    native_container = ui.element('div')
+
+    def _view_btn_style(active: bool) -> str:
+        weight = '600' if active else '500'
+        color = 'var(--text)' if active else 'var(--text-3)'
+        border = 'var(--text)' if active else 'transparent'
+        return (
+            f'background:transparent;border:none;border-bottom:2px solid {border};'
+            f'padding:9px 14px;cursor:pointer;font-size:13px;font-weight:{weight};'
+            f'color:{color};transition:all .15s;'
+        )
+
+    def _switch_view(key: str):
+        view_state[0] = key
+        for k, b in view_btns.items():
+            b.style(_view_btn_style(k == key))
+        dive_container.style(f'display:{"block" if key == "dive" else "none"};')
+        native_container.style(f'display:{"block" if key == "native" else "none"};')
+
+    view_btns['dive'].on('click', lambda _e: _switch_view('dive'))
+    view_btns['native'].on('click', lambda _e: _switch_view('native'))
+
+    with dive_container:
+        _build_dive_embed()
+
+    with native_container:
+        _build_native_dashboard(config)
+
+    _switch_view('dive')
+
+
+def _build_native_dashboard(config: dict):
+    """(참고용) 은행별 지표 카드·비교 — 실 FISIS 연동 전까지 샘플 데이터로 표시."""
 
     api_key = os.environ.get("FSS_API_KEY", "").strip() or config.get("fss_api_key", "")
     has_real_data = bool(_fetch_from_fss(api_key, BANKS[0]["code"]))  # 현재는 항상 False
