@@ -294,6 +294,26 @@ def _first_rate_value(d: dict) -> "float | None":
     return None
 
 
+# 시가평가 행에서 '채권종목명'으로 볼 수 있는 텍스트 패턴(위치형 grid 대비)
+_VAL_LABEL_RE = re.compile(r"국고|국채|통안|산금|회사채|여전|은행채|특수채|년|월|일물")
+
+
+def _val_label(row: dict) -> "str | None":
+    """시가평가 행에서 채권종목명을 추출.
+
+    - 의미형 필드(_VAL_NAME_FIELDS)가 있으면 우선.
+    - 없으면 위치형 grid(val1..valN)에서 '국고/년' 등 종목명스러운 텍스트를 채택.
+    """
+    lab = _pick(row, _VAL_NAME_FIELDS)
+    if lab and not re.fullmatch(r"[\d.,%\s-]*", lab):
+        return lab.strip()
+    for v in row.values():
+        s = (v or "").strip()
+        if s and _VAL_LABEL_RE.search(s):
+            return s
+    return None
+
+
 def _pick(d: dict, candidates: "list[str]") -> "str | None":
     """dict 에서 후보 키(대소문자 무시) 중 첫 번째로 값이 있는 것을 반환."""
     lower = {k.lower(): v for k, v in d.items()}
@@ -432,16 +452,18 @@ def _fetch_valuation(session: requests.Session, ymd: str) -> dict:
             + (f"원문을 {dbg} 에 저장했습니다." if dbg else "")
         )
 
-    # 각 행: 채권종목명 + val1..val5(5개 평가사 수익률)
+    # 각 행: 채권종목명 + 5개 평가사 수익률.
+    # 종목명은 위치형 grid(val1..valN)여도 견고하게 뽑되, 평가사 컬럼 매핑은
+    # 응답 구조 확정 전까지 잘못된 숫자를 표시하지 않도록 val1..val5 직접 매핑만
+    # 사용한다(모호한 소수 스캐빈징 금지 — 금액 오표시 방지).
     bonds: "dict[str, dict]" = {}
     for r in rows:
-        label = _pick(r, _VAL_NAME_FIELDS)
+        label = _val_label(r)
         if not label:
             continue
         per_company = {}
         for i, comp_nm in enumerate(companies):
             per_company[comp_nm] = _to_float(r.get(f"val{i+1}"))
-        # 값이 하나라도 있는 행만 채택
         if any(v is not None for v in per_company.values()):
             bonds[label] = per_company
 
@@ -487,10 +509,12 @@ def fetch_rates(date_ymd: "str | None" = None) -> dict:
         errors.append(("cd_91", exc))
 
     market_valuation = None
+    valuation_error = None
     try:
         market_valuation = _fetch_valuation(session, val_ymd)
     except Exception as exc:
         log.warning("시가평가수익률 조회 실패: %s", exc)
+        valuation_error = str(exc)
         errors.append(("market_valuation", exc))
 
     if cd_91 is None and market_valuation is None:
@@ -511,6 +535,8 @@ def fetch_rates(date_ymd: "str | None" = None) -> dict:
         "date": base_date,
         "cd_91": cd_91,
         "market_valuation": market_valuation,
+        # 시가평가 실패 사유(있으면) — 패널이 '데이터 없음' 대신 원인/진단을 표시
+        "market_valuation_error": valuation_error,
     }
 
 
