@@ -13,6 +13,8 @@
 """
 import html as _html
 import asyncio
+import calendar
+import datetime
 
 from nicegui import ui, run as nicegui_run
 
@@ -53,14 +55,57 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
         )
 
     # ── 컨트롤 바 ────────────────────────────────────────────────────────
+    _today = rates_scraper._now_kst().date()
+    _years = list(range(_today.year - 3, _today.year + 1))
     with ui.element('div').style(
         'display:flex;align-items:center;gap:12px;padding:12px 32px;'
-        'border-bottom:1px solid var(--border);flex-shrink:0;'
+        'border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;'
     ):
-        refresh_btn = ui.button('갱신').classes('btn-primary-mono')
+        # 조회일 선택 — 자유 텍스트 입력을 없애 오입력을 차단(연/월/일 드롭다운)
+        ui.html(
+            '<span style="font-size:12px;color:var(--text-2);font-weight:500;">'
+            '조회일</span>'
+        )
+        with ui.row().classes('items-center gap-1 no-wrap'):
+            year_sel = ui.select(options=_years, value=_today.year).props(
+                'outlined dense options-dense'
+            ).style('width:96px;')
+            ui.html('<span style="color:var(--text-4);">년</span>')
+            month_sel = ui.select(options=list(range(1, 13)), value=_today.month).props(
+                'outlined dense options-dense'
+            ).style('width:72px;')
+            ui.html('<span style="color:var(--text-4);">월</span>')
+            day_sel = ui.select(
+                options=list(range(1, 32)), value=_today.day
+            ).props('outlined dense options-dense').style('width:72px;')
+            ui.html('<span style="color:var(--text-4);">일</span>')
+        refresh_btn = ui.button('조회').classes('btn-primary-mono')
         last_updated_label = ui.html(
             '<span style="color:var(--text-4);font-size:12px;"></span>'
         )
+
+    def _days_in_month() -> int:
+        try:
+            return calendar.monthrange(int(year_sel.value), int(month_sel.value))[1]
+        except (TypeError, ValueError):
+            return 31
+
+    def _sync_day_options(_e=None):
+        """선택된 연/월에 맞춰 '일' 옵션을 해당 월의 마지막 날까지로 조정."""
+        dim = _days_in_month()
+        day_sel.set_options(list(range(1, dim + 1)))
+        if day_sel.value and int(day_sel.value) > dim:
+            day_sel.value = dim
+
+    def _selected_ymd() -> str:
+        y, m, d = year_sel.value, month_sel.value, day_sel.value
+        if None in (y, m, d):
+            return rates_scraper._yyyymmdd(rates_scraper.today_str())
+        return f'{int(y):04d}{int(m):02d}{int(d):02d}'
+
+    year_sel.on('update:model-value', _sync_day_options)
+    month_sel.on('update:model-value', _sync_day_options)
+    _sync_day_options()
 
     progress_bar = ui.linear_progress().props('indeterminate').classes('w-full')
     progress_bar.style('margin:0 32px;')
@@ -222,9 +267,12 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
                 '<span style="color:var(--text-4);font-size:12px;">조회 중…</span>'
             )
             try:
-                data = await nicegui_run.io_bound(rates_scraper.get_rates, force)
+                ymd = _selected_ymd()
+                data = await nicegui_run.io_bound(
+                    rates_scraper.get_rates, force, ymd
+                )
                 _show(data)
-                ui.notify('금리 정보 갱신 완료', type='positive', position='top')
+                ui.notify('금리 정보 조회 완료', type='positive', position='top')
             except rates_scraper.RatesNotConfiguredError as e:
                 # 실제 요청이 아직 연결되지 않은 상태 — 경고로 안내(오류 아님)
                 log.warning("금리 조회 미설정: %s", e)
