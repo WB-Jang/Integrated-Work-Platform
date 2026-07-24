@@ -1189,6 +1189,13 @@ select.inp option { background: var(--bg-elev); color: var(--text); }
   background: var(--danger);
 }
 .send-btn.is-stop:hover { background: var(--danger); opacity: .85; }
+/* 실행 중 '중지' 토글된 일반 버튼(조회/분석 등)에도 위험색 표시 */
+.btn-primary-mono.is-stop,
+.btn-primary-mono.is-stop:hover {
+  background: var(--danger) !important;
+  border-color: var(--danger) !important;
+  color: #fff !important;
+}
 .send-btn .material-symbols-outlined {
   font-size: 18px;
   font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 20;

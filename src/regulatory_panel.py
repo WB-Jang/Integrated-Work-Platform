@@ -3,6 +3,7 @@
 
 좌측 필터(모드 토글: 기관별 / 연합뉴스) · 우측 결과 리스트 + 메일 발송.
 """
+import asyncio
 import html as _html
 import re
 import time as _time
@@ -328,6 +329,10 @@ def build_regulatory_panel(config: dict, create_llm_fn):
 
     # ─── 기관별 조회 ────────────────────────────────────────────────────
 
+    # 실행 중 취소를 위한 컨트롤(작업 핸들 + 진행 상태)
+    _agency_ctl = {'task': None, 'busy': False}
+    _yna_ctl = {'task': None, 'busy': False}
+
     async def fetch_agency_updates():
         _apply_current_user()
         log.info('규제동향(기관별) 조회 시작')
@@ -337,7 +342,10 @@ def build_regulatory_panel(config: dict, create_llm_fn):
         naver_client_secret = config.get('naver_client_secret', '').strip()
 
         _start_ts = _time.time()
-        fetch_btn_agency.props(add='disable')
+        _agency_ctl['busy'] = True
+        _agency_ctl['task'] = asyncio.current_task()
+        fetch_btn_agency.text = '중지'
+        fetch_btn_agency.classes(add='is-stop')
         fetch_status_agency.content = ''
         progress_area.content = progress_block_html('수집 및 분석 중…', start_ts=_start_ts)
         result_container.clear()
@@ -363,6 +371,12 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             progress_area.content = ''
             ui.notify(f'{len(results)}건 분석 완료', type='positive', position='top')
             activity_log.record('regulatory', '금감원 보도자료 조회', detail=f'{len(results)}건', status='done')
+        except asyncio.CancelledError:
+            log.info('기관별 조회 취소됨')
+            progress_area.content = (
+                '<div class="muted-text" style="color:var(--warning);">조회를 중지했습니다.</div>'
+            )
+            ui.notify('조회를 중지했습니다.', type='warning', position='top')
         except Exception as e:
             log.error('기관별 조회 오류: %s', e)
             ui.notify(f'조회 오류: {e}', type='negative', position='top')
@@ -371,7 +385,10 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             )
         finally:
             skeleton_area.visible = False
-            fetch_btn_agency.props(remove='disable')
+            _agency_ctl['busy'] = False
+            _agency_ctl['task'] = None
+            fetch_btn_agency.text = '조회 및 분석'
+            fetch_btn_agency.classes(remove='is-stop')
 
     # ─── 뉴스 검색 ──────────────────────────────────────────────────────
 
@@ -397,7 +414,10 @@ def build_regulatory_panel(config: dict, create_llm_fn):
         naver_client_secret = config.get('naver_client_secret', '').strip()
 
         _start_ts = _time.time()
-        fetch_btn_yna.props(add='disable')
+        _yna_ctl['busy'] = True
+        _yna_ctl['task'] = asyncio.current_task()
+        fetch_btn_yna.text = '중지'
+        fetch_btn_yna.classes(add='is-stop')
         fetch_status_yna.content = ''
         result_container.clear()
         result_count_label.content = ''
@@ -544,6 +564,12 @@ def build_regulatory_panel(config: dict, create_llm_fn):
                 ui.notify(f'{len(results)}건 검색·요약 완료', type='positive', position='top')
             else:
                 ui.notify('검색 결과가 없습니다. 질문이나 날짜를 조정해 보세요.', type='warning', position='top')
+        except asyncio.CancelledError:
+            log.info('뉴스 검색 취소됨')
+            progress_area.content = (
+                '<div class="muted-text" style="color:var(--warning);">검색을 중지했습니다.</div>'
+            )
+            ui.notify('검색을 중지했습니다.', type='warning', position='top')
         except Exception as e:
             log.error('연합뉴스 검색 오류: %s', e)
             ui.notify(f'검색 오류: {e}', type='negative', position='top')
@@ -552,7 +578,10 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             )
         finally:
             skeleton_area.visible = False
-            fetch_btn_yna.props(remove='disable')
+            _yna_ctl['busy'] = False
+            _yna_ctl['task'] = None
+            fetch_btn_yna.text = '검색 및 요약'
+            fetch_btn_yna.classes(remove='is-stop')
 
     # ─── 메일 발송 ──────────────────────────────────────────────────────
 
@@ -585,6 +614,21 @@ def build_regulatory_panel(config: dict, create_llm_fn):
         finally:
             send_btn.props(remove='disable')
 
-    fetch_btn_agency.on_click(fetch_agency_updates)
-    fetch_btn_yna.on_click(fetch_yonhap_search)
+    def _on_agency_click():
+        # 실행 중이면 중지, 아니면 조회 시작 (버튼 하나로 토글)
+        if _agency_ctl['busy']:
+            if _agency_ctl['task'] is not None:
+                _agency_ctl['task'].cancel()
+            return
+        asyncio.create_task(fetch_agency_updates())
+
+    def _on_yna_click():
+        if _yna_ctl['busy']:
+            if _yna_ctl['task'] is not None:
+                _yna_ctl['task'].cancel()
+            return
+        asyncio.create_task(fetch_yonhap_search())
+
+    fetch_btn_agency.on_click(_on_agency_click)
+    fetch_btn_yna.on_click(_on_yna_click)
     send_btn.on_click(send_email)
