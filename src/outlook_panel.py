@@ -10,6 +10,7 @@ import json as _json
 import sys
 
 from nicegui import ui, run as nicegui_run
+from nicegui import context as _ng_context
 
 from logger import get_logger
 
@@ -57,6 +58,17 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
     # 접근한다. 브라우저(사용자 PC)가 127.0.0.1 브릿지를 호출 → 본인 Outlook 조회.
     bridge_url = (config.get('outlook_bridge_url') or 'http://127.0.0.1:8899').rstrip('/')
     bridge_token = config.get('outlook_bridge_token', '') or ''
+
+    # 백그라운드 태스크(asyncio.create_task)로 실행하면 NiceGUI 슬롯/클라이언트
+    # 컨텍스트가 유실되어 ui.run_javascript/ui.notify 가 "slot stack is empty" 로
+    # 실패한다. 패널 빌드 시점의 client 를 캡처해 태스크 내부에서 with 로 복원한다.
+    _client = _ng_context.client
+
+    def _spawn(coro):
+        async def _wrapped():
+            with _client:
+                await coro
+        return asyncio.create_task(_wrapped())
 
     # ── 헤더 ─────────────────────────────────────────────────────────────
     with ui.element('div').classes('page-head'):
@@ -500,14 +512,14 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
             if _fetch_ctl['task'] is not None:
                 _fetch_ctl['task'].cancel()
             return
-        asyncio.create_task(fetch_emails())
+        _spawn(fetch_emails())
 
     def _on_analyze_click():
         if _analyze_ctl['busy']:
             if _analyze_ctl['task'] is not None:
                 _analyze_ctl['task'].cancel()
             return
-        asyncio.create_task(run_analysis())
+        _spawn(run_analysis())
 
     # 조회는 사용자 PC 로컬 브릿지를 통하므로 서버 플랫폼과 무관하게 항상 활성화.
     # (분석/초안 생성은 서버측 LLM 이 조회된 메일 dict 로 수행)
@@ -517,4 +529,4 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
     open_draft_btn.on_click(open_draft_in_outlook)
 
     # 패널 로드 직후 브릿지 연결 상태 1회 확인 (클라이언트 연결 필요 → 타이머로 지연)
-    ui.timer(0.6, lambda: asyncio.create_task(_check_bridge()), once=True)
+    ui.timer(0.6, lambda: _spawn(_check_bridge()), once=True)
