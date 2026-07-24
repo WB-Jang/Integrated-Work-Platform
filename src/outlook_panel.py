@@ -159,6 +159,10 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
             f'{_html.escape(text)}</div>'
         )
 
+    # 실행 중 취소용 컨트롤
+    _fetch_ctl = {'task': None, 'busy': False}
+    _analyze_ctl = {'task': None, 'busy': False}
+
     async def fetch_emails():
         try:
             start_date = datetime.date.fromisoformat((start_input.value or '').strip())
@@ -168,7 +172,10 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
             return
 
         _set_fetch_status('조회 중…')
-        fetch_btn.props(add='disable')
+        _fetch_ctl['busy'] = True
+        _fetch_ctl['task'] = asyncio.current_task()
+        fetch_btn.text = '중지'
+        fetch_btn.classes(add='is-stop')
         mail_list_container.clear()
 
         try:
@@ -190,12 +197,19 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
             _set_fetch_status(f'{len(emails)}건 조회 완료')
             log.info('메일 조회 완료: %d건', len(emails))
             ui.notify(f'{len(emails)}건 조회 완료', type='positive', position='top')
+        except asyncio.CancelledError:
+            log.info('메일 조회 취소됨')
+            _set_fetch_status('조회 중지됨')
+            ui.notify('메일 조회를 중지했습니다.', type='warning', position='top')
         except Exception as e:
             log.error('메일 조회 오류: %s', e)
             ui.notify(f'조회 오류: {e}', type='negative', position='top')
             _set_fetch_status('조회 실패')
         finally:
-            fetch_btn.props(remove='disable')
+            _fetch_ctl['busy'] = False
+            _fetch_ctl['task'] = None
+            fetch_btn.text = '메일 조회'
+            fetch_btn.classes(remove='is-stop')
 
     def _render_mail_list(emails: list[dict]):
         mail_list_container.clear()
@@ -304,7 +318,10 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
             return
 
         analysis_progress.visible = True
-        analyze_btn.props(add='disable')
+        _analyze_ctl['busy'] = True
+        _analyze_ctl['task'] = asyncio.current_task()
+        analyze_btn.text = '중지'
+        analyze_btn.classes(add='is-stop')
         analysis_result.content = (
             '<div class="muted-text" style="padding:12px 0;">분석 중…</div>'
         )
@@ -324,12 +341,21 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
             )
             log.info('메일 분석 완료 (task: %s...)', task[:40])
             ui.notify('분석 완료', type='positive', position='top')
+        except asyncio.CancelledError:
+            log.info('메일 분석 취소됨')
+            analysis_result.content = (
+                '<div class="muted-text" style="color:var(--warning);padding:12px 0;">분석을 중지했습니다.</div>'
+            )
+            ui.notify('분석을 중지했습니다.', type='warning', position='top')
         except Exception as e:
             log.error('메일 분석 오류: %s', e)
             ui.notify(f'분석 오류: {e}', type='negative', position='top')
         finally:
             analysis_progress.visible = False
-            analyze_btn.props(remove='disable')
+            _analyze_ctl['busy'] = False
+            _analyze_ctl['task'] = None
+            analyze_btn.text = 'LLM 분석 시작'
+            analyze_btn.classes(remove='is-stop')
 
     async def run_reply():
         idx = state.get('selected_idx')
@@ -371,9 +397,23 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
             reply_progress.visible = False
             reply_btn.props(remove='disable')
 
+    def _on_fetch_click():
+        if _fetch_ctl['busy']:
+            if _fetch_ctl['task'] is not None:
+                _fetch_ctl['task'].cancel()
+            return
+        asyncio.create_task(fetch_emails())
+
+    def _on_analyze_click():
+        if _analyze_ctl['busy']:
+            if _analyze_ctl['task'] is not None:
+                _analyze_ctl['task'].cancel()
+            return
+        asyncio.create_task(run_analysis())
+
     if outlook_ok:
-        fetch_btn.on_click(fetch_emails)
-        analyze_btn.on_click(run_analysis)
+        fetch_btn.on_click(_on_fetch_click)
+        analyze_btn.on_click(_on_analyze_click)
         reply_btn.on_click(run_reply)
     else:
         # HF/Linux: 모든 액션을 안내 메시지로 대체

@@ -51,13 +51,14 @@ _SERVER_META = {
 # 폴링하여 표시한다. 이렇게 하면 새로고침/재접속 후에도 진행·완료 상태가 보인다.
 _BUILD: dict = {
     'active': False,       # 빌드 진행 중 여부
-    'phase': 'idle',       # 'idle' | 'building' | 'done' | 'error'
+    'phase': 'idle',       # 'idle' | 'building' | 'done' | 'error' | 'cancelled'
     'law_name': '',
     'current': 0,
     'total': 1,
     'msg': '',
     'result': None,        # 성공 시 build_index 반환 dict
     'error': None,         # 실패 시 메시지
+    'cancel': False,       # 취소 요청 플래그 (worker가 협조적으로 확인)
     'ui_handled': True,    # 완료/오류 후 1회성 후처리(알림·reload·정리) 완료 여부
 }
 
@@ -71,18 +72,23 @@ def _build_progress_cb(current, total, msg):
 def _build_worker(paths, db_dir, law_name, chunk_size, overlap, append, use_llm, llm_config, user_initials="-"):
     """백그라운드 스레드에서 실제 DB 구축을 수행하고 _BUILD 에 결과를 기록한다."""
     set_current_user(user_initials)   # 스레드 컨텍스트에 사용자 설정
-    from legal_db_builder import build_index
+    from legal_db_builder import build_index, BuildCancelled
     try:
         _BUILD['phase'] = 'building'
         result = build_index(
             paths, db_dir, law_name, None, None,
             int(chunk_size), int(overlap), bool(append),
             bool(use_llm), llm_config, _build_progress_cb,
+            should_cancel=lambda: _BUILD.get('cancel', False),
         )
         _BUILD['result'] = result
         _BUILD['phase'] = 'done'
         log.info("DB 구축 작업 완료(worker): %s — %s청크",
                  law_name, (result or {}).get('total_chunks'))
+    except BuildCancelled:
+        _BUILD['phase'] = 'cancelled'
+        _BUILD['msg'] = '사용자 취소'
+        log.info('DB 구축 취소됨(worker): %s', law_name)
     except Exception as e:
         _BUILD['error'] = str(e)
         _BUILD['phase'] = 'error'
@@ -425,6 +431,8 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
 
                 with ui.row().classes('gap-2 mt-2'):
                     build_btn = ui.button('DB 구축').classes('btn-primary-mono')
+                    build_cancel_btn = ui.button('구축 취소').classes('btn-primary-mono')
+                    build_cancel_btn.visible = False
                     clear_btn = ui.button('이 법령 DB 초기화').classes('btn-primary-mono')
 
                 build_progress = ui.linear_progress(value=0).classes('w-full mt-2')
@@ -467,7 +475,7 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
                     _BUILD.update({
                         'active': True, 'phase': 'building', 'law_name': law_name,
                         'current': 0, 'total': 1, 'msg': '준비 중…',
-                        'result': None, 'error': None, 'ui_handled': True,
+                        'result': None, 'error': None, 'cancel': False, 'ui_handled': True,
                     })
                     paths_snapshot = list(uploaded_paths)
                     _user = ((nav_ctx or {}).get('app_state') or {}).get('user_initials', '-')
@@ -483,6 +491,8 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
                     uploaded_paths.clear()
                     uploaded_label.content = '<div class="muted-text">업로드된 파일 없음</div>'
                     build_btn.props(add='disable')
+                    build_cancel_btn.props(remove='disable')
+                    build_cancel_btn.visible = True
                     build_progress.visible = True
                     build_progress.value = 0.02
                     build_status.content = (
@@ -504,36 +514,48 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
 
                         if phase == 'building' or st['active']:
                             build_btn.props(add='disable')
+                            build_cancel_btn.visible = True
                             build_progress.visible = True
                             frac = (st['current'] / st['total']) if st['total'] else 0
                             build_progress.value = max(0.02, min(frac, 0.99))
+                            _cancel_note = ' — 취소 요청됨(현재 단계 후 중지)' if st.get('cancel') else ''
                             build_status.content = (
                                 f'<div class="muted-text" style="margin-top:6px;">'
                                 f"'{_html.escape(st['law_name'])}' 구축 중… "
                                 f"{_html.escape(str(st['msg']))} "
-                                f"({st['current']}/{st['total']})</div>"
+                                f"({st['current']}/{st['total']}){_cancel_note}</div>"
                             )
                         elif phase == 'done':
                             r = st['result'] or {}
                             build_progress.value = 1.0
                             build_progress.visible = False
                             build_btn.props(remove='disable')
+                            build_cancel_btn.visible = False
                             build_status.content = (
                                 f'<div class="muted-text" style="margin-top:6px;color:var(--text);">'
                                 f"완료: '{_html.escape(st['law_name'])}' — "
                                 f'{r.get("total_chunks", 0)}청크 / dim={r.get("dim", 0)} / '
                                 f'{r.get("total_files", 0)}파일</div>'
                             )
+                        elif phase == 'cancelled':
+                            build_progress.visible = False
+                            build_btn.props(remove='disable')
+                            build_cancel_btn.visible = False
+                            build_status.content = (
+                                f'<div class="muted-text" style="margin-top:6px;color:var(--warning);">'
+                                f"'{_html.escape(st['law_name'])}' DB 구축이 취소되었습니다.</div>"
+                            )
                         elif phase == 'error':
                             build_progress.visible = False
                             build_btn.props(remove='disable')
+                            build_cancel_btn.visible = False
                             build_status.content = (
                                 f'<div class="muted-text" style="margin-top:6px;color:#b91c1c;">'
                                 f'오류: {_html.escape(str(st["error"]))}</div>'
                             )
 
-                        # 완료/오류 직후 1회성 후처리 (알림·DB reload·목록 갱신)
-                        if phase in ('done', 'error') and not st['ui_handled']:
+                        # 완료/취소/오류 직후 1회성 후처리 (알림·DB reload·목록 갱신)
+                        if phase in ('done', 'error', 'cancelled') and not st['ui_handled']:
                             st['ui_handled'] = True
                             if phase == 'done':
                                 try:
@@ -543,6 +565,8 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
                                     log.warning('reload_agent_db 실패: %s', _re)
                                 _refresh_db_list()
                                 ui.notify(f"'{st['law_name']}' DB 구축 완료", type='positive', position='top')
+                            elif phase == 'cancelled':
+                                ui.notify(f"'{st['law_name']}' DB 구축을 취소했습니다.", type='warning', position='top')
                             else:
                                 ui.notify(f"DB 구축 오류: {st['error']}", type='negative', position='top')
 
@@ -584,7 +608,15 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
                             ui.button('초기화', on_click=_do_clear).classes('btn-primary-mono')
                     dlg.open()
 
+                def _cancel_build():
+                    if _BUILD.get('active'):
+                        _BUILD['cancel'] = True
+                        build_cancel_btn.props(add='disable')
+                        ui.notify('구축 취소 요청 — 현재 단계 후 중지됩니다.',
+                                  type='warning', position='top')
+
                 build_btn.on_click(_run_build)
+                build_cancel_btn.on_click(_cancel_build)
                 clear_btn.on_click(_confirm_clear)
 
     # ── 메뉴 관리 섹션 ────────────────────────────────────────────────────

@@ -17,6 +17,16 @@ from logger import get_logger
 
 log = get_logger("legal_db_builder")
 
+
+class BuildCancelled(Exception):
+    """DB 구축이 사용자 요청으로 취소되었을 때 발생 (협조적 취소)."""
+
+
+def _check_cancel(should_cancel):
+    if should_cancel is not None and should_cancel():
+        raise BuildCancelled()
+
+
 _MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models", "bge-m3")
 _emb_model = None
 
@@ -181,7 +191,8 @@ def _embed_via_serverless(texts: list[str], batch_size: int = 32, progress_callb
     return np.array(vecs, dtype="float32")
 
 
-def _embed_chunks(chunks: list[str], batch_size: int = 16, progress_callback=None) -> np.ndarray:
+def _embed_chunks(chunks: list[str], batch_size: int = 16, progress_callback=None,
+                  should_cancel=None) -> np.ndarray:
     # 1순위: RunPod Serverless
     try:
         import runpod_client
@@ -207,6 +218,7 @@ def _embed_chunks(chunks: list[str], batch_size: int = 16, progress_callback=Non
     all_vecs = []
     total = len(chunks)
     for i in range(0, total, batch_size):
+        _check_cancel(should_cancel)   # 배치 단위 협조적 취소
         batch = chunks[i:i + batch_size]
         vecs = model.encode(batch, normalize_embeddings=True, show_progress_bar=False)
         all_vecs.append(vecs)
@@ -229,6 +241,7 @@ def build_index(
     use_llm_chunking: bool = False,
     llm_config: dict | None = None,
     progress_callback=None,
+    should_cancel=None,
 ) -> dict:
     """
     업로드된 파일로 FAISS 인덱스를 구축합니다.
@@ -322,8 +335,10 @@ def build_index(
                          source_name, len(chunks), done, total_files)
                 if progress_callback:
                     progress_callback(done, total_files, f"청킹 {done}/{total_files}: {source_name}")
+                _check_cancel(should_cancel)
     else:
         for path in file_paths:
+            _check_cancel(should_cancel)
             source_name, chunks = _process_file(path)
             all_chunks.extend(chunks)
             done += 1
@@ -336,9 +351,11 @@ def build_index(
         return {"total_chunks": 0, "total_files": len(file_paths), "dim": 0, "law_name": law_name}
 
     # 임베딩
+    _check_cancel(should_cancel)
     if progress_callback:
         progress_callback(0, len(all_chunks), "임베딩 시작...")
-    vectors = _embed_chunks(all_chunks, progress_callback=progress_callback)
+    vectors = _embed_chunks(all_chunks, progress_callback=progress_callback,
+                            should_cancel=should_cancel)
     dim = vectors.shape[1]
 
     # FAISS 인덱스 구성
