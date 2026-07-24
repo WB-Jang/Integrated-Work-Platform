@@ -9,6 +9,7 @@ import re
 import time as _time
 
 from nicegui import ui, run as nicegui_run, app as nicegui_app
+from nicegui import context as _ng_context
 
 from logger import get_logger, set_current_user
 import activity_log
@@ -333,6 +334,16 @@ def build_regulatory_panel(config: dict, create_llm_fn):
     _agency_ctl = {'task': None, 'busy': False}
     _yna_ctl = {'task': None, 'busy': False}
 
+    # create_task 로 띄우면 NiceGUI 슬롯/클라이언트 컨텍스트가 유실되어
+    # ui.notify 등이 실패한다. 빌드 시점 client 를 캡처해 태스크 내부에서 복원.
+    _client = _ng_context.client
+
+    def _spawn(coro):
+        async def _wrapped():
+            with _client:
+                await coro
+        return asyncio.create_task(_wrapped())
+
     async def fetch_agency_updates():
         _apply_current_user()
         log.info('규제동향(기관별) 조회 시작')
@@ -620,14 +631,14 @@ def build_regulatory_panel(config: dict, create_llm_fn):
             if _agency_ctl['task'] is not None:
                 _agency_ctl['task'].cancel()
             return
-        asyncio.create_task(fetch_agency_updates())
+        _spawn(fetch_agency_updates())
 
     def _on_yna_click():
         if _yna_ctl['busy']:
             if _yna_ctl['task'] is not None:
                 _yna_ctl['task'].cancel()
             return
-        asyncio.create_task(fetch_yonhap_search())
+        _spawn(fetch_yonhap_search())
 
     fetch_btn_agency.on_click(_on_agency_click)
     fetch_btn_yna.on_click(_on_yna_click)
