@@ -6,6 +6,7 @@ Outlook 메일 분석 패널 UI — 모노크롬 디자인 시스템 이식판
 import asyncio
 import datetime
 import html as _html
+import json as _json
 import sys
 
 from nicegui import ui, run as nicegui_run
@@ -52,7 +53,10 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
         'persona_block': persona_block or '',
     }
 
-    outlook_ok = _is_outlook_available()
+    # 서버 배포 구조: 사용자 PC의 Outlook은 각 PC에서 실행되는 로컬 브릿지를 통해
+    # 접근한다. 브라우저(사용자 PC)가 127.0.0.1 브릿지를 호출 → 본인 Outlook 조회.
+    bridge_url = (config.get('outlook_bridge_url') or 'http://127.0.0.1:8899').rstrip('/')
+    bridge_token = config.get('outlook_bridge_token', '') or ''
 
     # ── 헤더 ─────────────────────────────────────────────────────────────
     with ui.element('div').classes('page-head'):
@@ -63,15 +67,19 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
             '</div>'
         )
 
-    if not outlook_ok:
-        ui.html(
-            '<div style="margin:0 0 16px;padding:12px 14px;'
-            'background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);border-radius:8px;'
-            'color:var(--warning);font-size:13px;line-height:1.55;">'
-            '<b>⚠ 베타 환경 안내</b><br>'
-            + _html.escape(_OUTLOOK_UNAVAILABLE_MSG) +
-            '</div>'
+    # 브릿지 연결 상태 배지 (사용자 PC의 로컬 브릿지 실행 여부를 표시)
+    bridge_status = ui.html('')
+
+    def _set_bridge_status(html_inner: str):
+        bridge_status.content = (
+            '<div style="margin:0 0 16px;padding:10px 14px;border-radius:8px;'
+            'font-size:12.5px;line-height:1.55;border:1px solid var(--border);'
+            'background:var(--bg);">' + html_inner + '</div>'
         )
+
+    _set_bridge_status(
+        '<span style="color:var(--text-4);">Outlook 브릿지 연결 확인 중…</span>'
+    )
 
     # ── 본문 — 좌측 필터 / 우측 탭 ──────────────────────────────────────
     with ui.element('div').classes('filter-result-row'):
@@ -143,7 +151,10 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
                         label='답장 지시사항',
                         placeholder='예: 수신 확인 및 다음 주 미팅 일정 조율을 요청하는 답장',
                     ).props('outlined autogrow rows=3').classes('w-full mt-2 mb-2')
-                    reply_btn = ui.button('초안 생성').classes('btn-primary-mono mb-2')
+                    with ui.row().classes('gap-2 mb-2 items-center'):
+                        reply_btn = ui.button('초안 생성').classes('btn-primary-mono')
+                        open_draft_btn = ui.button('Outlook에 초안 열기').classes('btn-primary-mono')
+                        open_draft_btn.visible = False
                     reply_progress = ui.linear_progress().props('indeterminate').classes('w-full')
                     reply_progress.visible = False
                     reply_result = ui.html(
@@ -163,6 +174,62 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
     _fetch_ctl = {'task': None, 'busy': False}
     _analyze_ctl = {'task': None, 'busy': False}
 
+    # ── 로컬 브릿지 호출 (브라우저=사용자 PC 에서 fetch 실행) ────────────────
+    async def _bridge_fetch(path: str, params: dict, timeout: float = 180):
+        """사용자 브라우저에서 127.0.0.1 브릿지로 GET 요청. dict 반환(오류 시 {'error':...})."""
+        q = dict(params)
+        if bridge_token:
+            q['token'] = bridge_token
+        js = (
+            "try {"
+            f"  const base = {_json.dumps(bridge_url)};"
+            f"  const params = new URLSearchParams({_json.dumps({k: str(v) for k, v in q.items()})});"
+            f"  const r = await fetch(base + {_json.dumps(path)} + '?' + params.toString());"
+            "  if (!r.ok) return {error: 'HTTP ' + r.status};"
+            "  return await r.json();"
+            "} catch (e) { return {error: '브릿지 연결 실패: ' + String(e)}; }"
+        )
+        res = await ui.run_javascript(js, timeout=timeout)
+        if not isinstance(res, dict):
+            return {'error': '브릿지 응답 없음 (브릿지 실행/연결 확인)'}
+        return res
+
+    async def _bridge_post(path: str, payload: dict, timeout: float = 30):
+        """브라우저에서 127.0.0.1 브릿지로 POST(JSON). dict 반환."""
+        url = bridge_url + path + (f'?token={bridge_token}' if bridge_token else '')
+        js = (
+            "try {"
+            f"  const r = await fetch({_json.dumps(url)}, {{"
+            "     method: 'POST', headers: {'Content-Type': 'application/json'},"
+            f"     body: JSON.stringify({_json.dumps(payload)}) }});"
+            "  if (!r.ok) return {ok:false, error: 'HTTP ' + r.status};"
+            "  return await r.json();"
+            "} catch (e) { return {ok:false, error: '브릿지 연결 실패: ' + String(e)}; }"
+        )
+        res = await ui.run_javascript(js, timeout=timeout)
+        if not isinstance(res, dict):
+            return {'ok': False, 'error': '브릿지 응답 없음'}
+        return res
+
+    async def _check_bridge():
+        try:
+            res = await _bridge_fetch('/health', {}, timeout=8)
+        except Exception as e:
+            res = {'error': str(e)}
+        if res.get('ok'):
+            mbox = _html.escape(str(res.get('mailbox') or '(메일함 확인 불가)'))
+            _set_bridge_status(
+                '<span style="color:var(--success);font-weight:600;">● Outlook 브릿지 연결됨</span>'
+                f' <span style="color:var(--text-4);">— 메일함: {mbox}</span>'
+            )
+            return True
+        _set_bridge_status(
+            '<span style="color:var(--warning);font-weight:600;">● Outlook 브릿지 미연결</span> '
+            '<span style="color:var(--text-3);">— 사용자 PC에서 <b>outlook_bridge.exe</b> 실행 후 '
+            '“메일 조회”를 눌러주세요. (Outlook 로그인 필요)</span>'
+        )
+        return False
+
     async def fetch_emails():
         try:
             start_date = datetime.date.fromisoformat((start_input.value or '').strip())
@@ -171,7 +238,7 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
             ui.notify('날짜 형식을 YYYY-MM-DD로 입력하세요.', type='warning', position='top')
             return
 
-        _set_fetch_status('조회 중…')
+        _set_fetch_status('조회 중… (사용자 PC Outlook)')
         _fetch_ctl['busy'] = True
         _fetch_ctl['task'] = asyncio.current_task()
         fetch_btn.text = '중지'
@@ -179,14 +246,17 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
         mail_list_container.clear()
 
         try:
-            from outlook_agent import get_emails
-            emails = await nicegui_run.io_bound(
-                get_emails,
-                start_date, end_date,
-                (sender_input.value or '').strip(),
-                (recip_input.value or '').strip(),
-                att_check.value,
-            )
+            res = await _bridge_fetch('/emails', {
+                'start': start_date.isoformat(),
+                'end': end_date.isoformat(),
+                'sender': (sender_input.value or '').strip(),
+                'recipient': (recip_input.value or '').strip(),
+                'attachments': '1' if att_check.value else '0',
+            })
+            if res.get('error'):
+                await _check_bridge()
+                raise RuntimeError(res['error'])
+            emails = res.get('emails') or []
             state['emails'] = emails
             _render_mail_list(emails)
             mail_count_label.content = (
@@ -195,8 +265,9 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
                 f'</div>'
             )
             _set_fetch_status(f'{len(emails)}건 조회 완료')
-            log.info('메일 조회 완료: %d건', len(emails))
+            log.info('메일 조회 완료(브릿지): %d건', len(emails))
             ui.notify(f'{len(emails)}건 조회 완료', type='positive', position='top')
+            await _check_bridge()
         except asyncio.CancelledError:
             log.info('메일 조회 취소됨')
             _set_fetch_status('조회 중지됨')
@@ -388,6 +459,9 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
                 'line-height:1.75;color:var(--text);">'
                 f'{safe}</div>'
             )
+            state['last_draft'] = draft
+            state['last_draft_idx'] = idx
+            open_draft_btn.visible = True   # 본인 Outlook 에 초안 열기 가능
             log.info('답장 초안 생성 완료')
             ui.notify('초안 생성 완료', type='positive', position='top')
         except Exception as e:
@@ -396,6 +470,30 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
         finally:
             reply_progress.visible = False
             reply_btn.props(remove='disable')
+
+    async def open_draft_in_outlook():
+        """생성된 초안을 사용자 PC Outlook 에 회신 초안 창으로 연다(브릿지 POST)."""
+        draft = state.get('last_draft')
+        idx = state.get('last_draft_idx')
+        if not draft or idx is None:
+            ui.notify('먼저 초안을 생성하세요.', type='warning', position='top')
+            return
+        email = state['emails'][idx]
+        open_draft_btn.props(add='disable')
+        try:
+            res = await _bridge_post('/reply-draft', {
+                'entry_id': email.get('entry_id', ''),
+                'store_id': email.get('store_id', ''),
+                'body': draft,
+                'reply_all': False,
+            })
+            if res.get('ok'):
+                ui.notify('Outlook에 회신 초안을 열었습니다.', type='positive', position='top')
+            else:
+                ui.notify(f"초안 열기 실패: {res.get('error', '브릿지 확인')}",
+                          type='negative', position='top')
+        finally:
+            open_draft_btn.props(remove='disable')
 
     def _on_fetch_click():
         if _fetch_ctl['busy']:
@@ -411,20 +509,12 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
             return
         asyncio.create_task(run_analysis())
 
-    if outlook_ok:
-        fetch_btn.on_click(_on_fetch_click)
-        analyze_btn.on_click(_on_analyze_click)
-        reply_btn.on_click(run_reply)
-    else:
-        # HF/Linux: 모든 액션을 안내 메시지로 대체
-        fetch_btn.props(add='disable')
-        analyze_btn.props(add='disable')
-        reply_btn.props(add='disable')
+    # 조회는 사용자 PC 로컬 브릿지를 통하므로 서버 플랫폼과 무관하게 항상 활성화.
+    # (분석/초안 생성은 서버측 LLM 이 조회된 메일 dict 로 수행)
+    fetch_btn.on_click(_on_fetch_click)
+    analyze_btn.on_click(_on_analyze_click)
+    reply_btn.on_click(run_reply)
+    open_draft_btn.on_click(open_draft_in_outlook)
 
-        def _notify_unavailable(_e=None):
-            ui.notify(_OUTLOOK_UNAVAILABLE_MSG, type='warning', position='top',
-                      multi_line=True, timeout=6000)
-
-        fetch_btn.on_click(_notify_unavailable)
-        analyze_btn.on_click(_notify_unavailable)
-        reply_btn.on_click(_notify_unavailable)
+    # 패널 로드 직후 브릿지 연결 상태 1회 확인 (클라이언트 연결 필요 → 타이머로 지연)
+    ui.timer(0.6, lambda: asyncio.create_task(_check_bridge()), once=True)
