@@ -21,7 +21,8 @@ import random
 
 import requests
 
-from nicegui import ui
+from nicegui import ui, run as nicegui_run
+import fisis_client
 from logger import get_logger
 
 log = get_logger("risk_indicator")
@@ -41,91 +42,104 @@ BANKS = [
     {"code": "citi",    "name": "한국씨티은행"},
 ]
 
-# 지표 메타 — key, label, unit, 좋은 방향(↑ or ↓), 임계값(주의/위험)
-# 임계값은 일반적인 감독 기준에 근사한 값으로 시각적 색상 표시 목적
+# 지표 메타 — 파인(FINE) '은행 핵심경영지표' 구성에 맞춘 세트.
+# key, label, unit, 좋은 방향(↑ or ↓), 임계값(주의/위험), 설명.
+# 임계값은 일반적인 감독 기준에 근사한 값으로 시각적 색상 표시 목적.
 INDICATORS = [
-    {"key": "bis",        "label": "BIS 자기자본비율", "unit": "%",  "good": "up",
+    {"key": "bis",         "label": "총자본비율(BIS)", "unit": "%",  "good": "up",
      "warn": 13.0, "danger": 10.5, "desc": "총자본 / 위험가중자산. 감독 권고 10.5% 이상."},
-    {"key": "tier1",      "label": "기본자본비율(Tier 1)", "unit": "%", "good": "up",
-     "warn": 11.5, "danger": 8.5, "desc": "보통주자본 + 기타기본자본 비율."},
-    {"key": "npl",        "label": "고정이하여신비율(NPL)", "unit": "%", "good": "down",
-     "warn": 0.7, "danger": 1.5, "desc": "부실여신/총여신. 낮을수록 자산건전성 양호."},
-    {"key": "roa",        "label": "ROA (총자산순이익률)", "unit": "%", "good": "up",
-     "warn": 0.5, "danger": 0.2, "desc": "당기순이익/총자산. 수익성 지표."},
-    {"key": "roe",        "label": "ROE (자기자본순이익률)", "unit": "%", "good": "up",
-     "warn": 7.0, "danger": 4.0, "desc": "당기순이익/자기자본."},
-    {"key": "liquidity",  "label": "유동성커버리지비율(LCR)", "unit": "%", "good": "up",
-     "warn": 105.0, "danger": 100.0, "desc": "30일간 순현금유출 대비 고유동성자산."},
-    {"key": "loan_dep",   "label": "예대율", "unit": "%", "good": "neutral",
-     "warn": 100.0, "danger": 105.0, "desc": "총대출/총예수금. 100% 부근 권장."},
-    {"key": "total_asset","label": "총자산", "unit": "조원", "good": "up",
+    {"key": "tier1",       "label": "기본자본비율(Tier 1)", "unit": "%", "good": "up",
+     "warn": 11.5, "danger": 8.5, "desc": "기본자본 / 위험가중자산."},
+    {"key": "cet1",        "label": "보통주자본비율(CET1)", "unit": "%", "good": "up",
+     "warn": 9.5, "danger": 7.0, "desc": "보통주자본 / 위험가중자산."},
+    {"key": "npl",         "label": "고정이하여신비율", "unit": "%", "good": "down",
+     "warn": 0.7, "danger": 1.5, "desc": "고정이하여신 / 총여신. 낮을수록 자산건전성 양호."},
+    {"key": "delinquency", "label": "원화대출 연체율", "unit": "%", "good": "down",
+     "warn": 0.5, "danger": 1.0, "desc": "1개월 이상 연체 원화대출 / 총원화대출."},
+    {"key": "roa",         "label": "총자산순이익률(ROA)", "unit": "%", "good": "up",
+     "warn": 0.5, "danger": 0.2, "desc": "당기순이익 / 총자산."},
+    {"key": "roe",         "label": "자기자본순이익률(ROE)", "unit": "%", "good": "up",
+     "warn": 7.0, "danger": 4.0, "desc": "당기순이익 / 자기자본."},
+    {"key": "nim",         "label": "순이자마진(NIM)", "unit": "%", "good": "up",
+     "warn": 1.5, "danger": 1.0, "desc": "순이자이익 / 이자부자산."},
+    {"key": "loan_dep",    "label": "원화예대율", "unit": "%", "good": "neutral",
+     "warn": 100.0, "danger": 105.0, "desc": "원화대출금 / 원화예수금. 100% 이하 권장."},
+    {"key": "lcr",         "label": "유동성커버리지비율(LCR)", "unit": "%", "good": "up",
+     "warn": 105.0, "danger": 100.0, "desc": "고유동성자산 / 30일 순현금유출."},
+    {"key": "total_asset", "label": "총자산", "unit": "조원", "good": "up",
      "warn": 0, "danger": 0, "desc": "은행 규모 지표."},
+    {"key": "net_income",  "label": "당기순이익", "unit": "억원", "good": "up",
+     "warn": 0, "danger": 0, "desc": "해당 기간 당기순이익."},
 ]
 
-# 월 라벨 (최근 n개월, 기준월 선택창에서 사용)
-def _recent_months(n: int = 12) -> list[str]:
-    today = datetime.date.today()
-    y, m = today.year, today.month
-    out = []
-    for _ in range(n):
-        out.append(f"{y}-{m:02d}")
-        m -= 1
-        if m == 0:
-            m = 12
-            y -= 1
-    return list(reversed(out))
+# 시계열 차트 묶음 (단위가 다른 총자산/당기순이익은 개별 차트)
+CHART_GROUPS = [
+    ("자본 적정성",      ["bis", "tier1", "cet1"]),
+    ("자산 건전성",      ["npl", "delinquency"]),
+    ("수익성",           ["roa", "roe", "nim"]),
+    ("유동성·예대율",    ["lcr", "loan_dep"]),
+    ("총자산",           ["total_asset"]),
+    ("당기순이익",       ["net_income"]),
+]
 
 
-# ─── Mock 데이터 생성 ────────────────────────────────────────────────────────
-# 실제 FSS API 응답 스키마가 확정되기 전까지 사용. 은행/지표별로
-# 산업 평균에 가까운 합리적인 분포로 무작위 생성하되, 시드를 은행 코드에
-# 고정하여 같은 은행은 항상 같은 값이 나오도록 함.
-def _mock_bank_indicators(bank_code: str) -> dict:
+# ─── Mock 데이터 생성 (FISIS 코드 확정 전/조회 실패 시 폴백) ─────────────────
+# 은행/지표별로 산업 평균에 가까운 분포로 생성하되, 시드를 은행 코드에 고정해
+# 같은 은행은 항상 같은 값이 나오도록 한다. 주어진 분기(base_months)에 맞춰 생성.
+_MOCK_BASE_RANGES = {
+    "bis":         (13.5, 18.0), "tier1":      (11.0, 15.5), "cet1":     (10.0, 14.0),
+    "npl":         (0.20, 0.95), "delinquency": (0.15, 0.70),
+    "roa":         (0.35, 0.85), "roe":        (6.0, 11.5),  "nim":      (1.3, 2.1),
+    "loan_dep":    (92.0, 102.0), "lcr":       (105.0, 145.0),
+    "total_asset": (180.0, 520.0), "net_income": (2000.0, 30000.0),
+}
+
+
+def _mock_bank_indicators(bank_code: str, base_months: list[str]) -> dict:
     rnd = random.Random(hash(bank_code) & 0xFFFFFFFF)
-    base = {
-        "bis":         round(rnd.uniform(13.5, 18.0), 2),
-        "tier1":       round(rnd.uniform(11.0, 15.5), 2),
-        "npl":         round(rnd.uniform(0.20, 0.95), 2),
-        "roa":         round(rnd.uniform(0.35, 0.85), 2),
-        "roe":         round(rnd.uniform(6.0, 11.5), 2),
-        "liquidity":   round(rnd.uniform(105.0, 145.0), 1),
-        "loan_dep":    round(rnd.uniform(92.0, 102.0), 1),
-        "total_asset": round(rnd.uniform(180.0, 520.0), 1),
-    }
-    # 월별 시계열 — 마지막 달은 base 값, 앞으로 갈수록 ±3~4% 변동
-    months = _recent_months(12)
+    base = {k: round(rnd.uniform(*rng), 2) for k, rng in _MOCK_BASE_RANGES.items()}
     series = {k: [] for k in base}
     for k, v in base.items():
-        cur = v * rnd.uniform(0.93, 1.05)
-        for _ in months:
+        cur = v * rnd.uniform(0.90, 1.04)
+        for _ in base_months:
             cur = max(cur * rnd.uniform(0.97, 1.03), 0.01)
             series[k].append(round(cur, 2))
-        series[k][-1] = v   # 마지막 달은 정확히 base 값
-    return {"latest": base, "series": series, "months": months}
+        series[k][-1] = v   # 마지막 분기는 정확히 base 값
+    return {
+        "latest": {k: s[-1] for k, s in series.items()},
+        "series": series,
+        "months": [fisis_client.quarter_label(m) for m in base_months],
+        "base_months": list(base_months),
+        "_source": "sample",
+    }
 
 
-# ─── FSS API 호출 (실패 시 mock) ──────────────────────────────────────────────
-# 현재 금감원 OpenAPI 중 은행별 재무 지표를 직접 노출하는 표준 엔드포인트가
-# 공개되어 있지 않습니다. 향후 정식 엔드포인트가 확정되면 _fetch_from_fss
-# 내부만 교체하면 됩니다. 그 전까지는 mock 데이터를 그대로 사용합니다.
-def _fetch_from_fss(api_key: str, bank_code: str) -> dict | None:
-    if not api_key:
-        return None
+# ─── FISIS 실데이터 (실패/코드미확정 시 mock 폴백) ────────────────────────────
+def _get_bank_indicators(api_key: str, bank_code: str,
+                         start_mm: str, end_mm: str) -> dict:
+    """은행 하나의 (start_mm~end_mm) 분기 시계열. FISIS 우선, 실패 시 샘플."""
     try:
-        # placeholder: 향후 실제 엔드포인트로 교체
-        # 예) requests.get(f"https://api.fss.or.kr/.../{bank_code}",
-        #                  params={"authKey": api_key}, timeout=15)
-        return None
-    except Exception as e:
-        log.warning("FSS API 호출 실패 (%s): %s", bank_code, e)
-        return None
-
-
-def _get_bank_indicators(api_key: str, bank_code: str) -> dict:
-    fetched = _fetch_from_fss(api_key, bank_code)
-    if fetched is not None:
+        keys = [i["key"] for i in INDICATORS]
+        fetched = fisis_client.fetch_bank_indicators(bank_code, keys, start_mm, end_mm)
+    except Exception as e:  # 방어적 — 어떤 경우에도 화면이 비지 않도록
+        log.warning("FISIS 조회 예외 (%s): %s", bank_code, e)
+        fetched = None
+    if fetched:
+        fetched.setdefault("_source", "fisis")
         return fetched
-    return _mock_bank_indicators(bank_code)
+    base_months = fisis_client.recent_quarters(_quarters_between(start_mm, end_mm))
+    return _mock_bank_indicators(bank_code, base_months)
+
+
+def _quarters_between(start_mm: str, end_mm: str) -> int:
+    """start_mm~end_mm(YYYYMM 분기말) 사이 분기 개수(포함)."""
+    try:
+        sy, sm = int(start_mm[:4]), int(start_mm[4:6])
+        ey, em = int(end_mm[:4]), int(end_mm[4:6])
+        n = (ey - sy) * 4 + ((em - 1) // 3 - (sm - 1) // 3) + 1
+        return max(1, min(n, 40))
+    except Exception:
+        return 8
 
 
 # ─── UI 헬퍼 ─────────────────────────────────────────────────────────────────
@@ -133,6 +147,8 @@ def _eval_status(ind: dict, value: float) -> tuple[str, str]:
     """지표 값이 정상/주의/위험 중 어디인지 판정. (status, color) 반환."""
     # 리터럴 hex 유지 — _indicator_card_html 이 "{color}1a" 로 알파값을 이어붙여
     # 배지 배경을 만들기 때문에 var(--x) 는 여기서 쓸 수 없다.
+    if value is None:
+        return ("자료없음", "#94a3b8")
     if ind["good"] == "up":
         if value < ind["danger"]:
             return ("위험", "#ef4444")
@@ -149,15 +165,19 @@ def _eval_status(ind: dict, value: float) -> tuple[str, str]:
 
 
 def _format_value(v, unit: str) -> str:
+    if v is None:
+        return "N/A"
     if unit == "조원":
         return f"{v:,.1f} {unit}"
+    if unit == "억원":
+        return f"{v:,.0f} {unit}"
     return f"{v:,.2f}{unit}"
 
 
 def _indicator_card_html(ind: dict, value: float, prev: float | None = None) -> str:
     status, color = _eval_status(ind, value)
     delta_html = ""
-    if prev is not None and prev != 0:
+    if value is not None and prev is not None and prev != 0:
         diff = value - prev
         pct = diff / prev * 100
         arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "—")
@@ -243,7 +263,7 @@ def build_risk_indicator_panel(config: dict):
     ):
         view_state = ['dive']  # 'dive' | 'native'
         view_btns: dict = {}
-        for k, label in [('dive', 'DIVE 원본'), ('native', '참고 지표 (샘플)')]:
+        for k, label in [('dive', 'DIVE 원본'), ('native', '은행별 주요 지표')]:
             b = ui.element('button').style('cursor:pointer;')
             with b:
                 ui.html(f'<span>{label}</span>')
@@ -282,56 +302,91 @@ def build_risk_indicator_panel(config: dict):
 
 
 def _build_native_dashboard(config: dict):
-    """(참고용) 은행별 지표 카드·비교 — 실 FISIS 연동 전까지 샘플 데이터로 표시."""
+    """은행별 주요 지표 — FISIS OpenAPI 실데이터(코드 확정 시), 실패 시 샘플 폴백.
 
+    · 기준시점(분기): 지표 카드가 그 시점 값을 표시
+    · 조회 기간(시작~종료 분기): 시계열 추이 그래프 구간
+    """
     api_key = os.environ.get("FSS_API_KEY", "").strip() or config.get("fss_api_key", "")
-    has_real_data = bool(_fetch_from_fss(api_key, BANKS[0]["code"]))  # 현재는 항상 False
 
-    months_list = _recent_months(12)
+    q_opts = fisis_client.quarter_options(years_back=5)   # 최근 20개 분기(YYYYMM, 오름차순)
+    _q_label = {mm: fisis_client.quarter_label(mm) for mm in q_opts}
+    _def_end = q_opts[-1]
+    _def_start = q_opts[-8] if len(q_opts) >= 8 else q_opts[0]
 
     state = {
         "selected_bank": BANKS[0]["code"],
-        "month_idx": len(months_list) - 1,  # 기본값: 최신월
-        "cache": {},  # bank_code -> indicators dict
+        "start_mm": _def_start,
+        "end_mm": _def_end,
+        "ref_mm": _def_end,      # 기준시점(카드 스냅샷)
+        "cache": {},             # bank_code -> data dict (현재 로드된 기간)
+        "source": "",            # 'fisis' | 'sample'
+        "loaded": False,
     }
 
     def _data_for(bank_code: str) -> dict:
-        if bank_code not in state["cache"]:
-            state["cache"][bank_code] = _get_bank_indicators(api_key, bank_code)
-        return state["cache"][bank_code]
+        return state["cache"].get(bank_code) or {}
+
+    def _ref_idx(d: dict) -> int:
+        bm = d.get("base_months") or []
+        if not bm:
+            return 0
+        try:
+            return bm.index(state["ref_mm"])
+        except ValueError:
+            return len(bm) - 1
 
     # ── 헤더 ──────────────────────────────────────────────────────────────
     with ui.element('div').classes('page-head'):
         ui.html(
             '<div class="titles">'
-            '<div class="page-title">Risk Indicator Dashboard</div>'
-            '<div class="page-subtitle">은행별 자본·자산건전성·수익성·유동성 지표를 한 화면에서 모니터링합니다.</div>'
+            '<div class="page-title">은행별 주요 지표</div>'
+            '<div class="page-subtitle">파인(FINE) 핵심경영지표 기반 — 자본·건전성·수익성·유동성을 분기 시계열로 확인합니다.</div>'
             '</div>'
         )
 
-    # 데이터 출처 안내
-    src_msg = (
-        '<span style="color:var(--success);">FSS Open API 연동</span>'
-        if has_real_data else
-        '<span style="color:var(--accent);">샘플 데이터 표시 중</span> · 실데이터 연동 대기 (FSS_API_KEY 설정 필요)'
-    )
-    ui.html(
-        f'<div style="font-size:11.5px;color:var(--text-4);margin:-6px 0 10px;">'
-        f'데이터 출처: {src_msg}</div>'
-    )
+    src_label = ui.html('')   # 데이터 출처 배지 (조회 후 갱신)
 
-    # 기준월 선택 — 단일 은행 상세/은행 비교 탭 공용
-    with ui.element('div').style(
-        'display:flex;align-items:center;gap:10px;margin-bottom:14px;'
-    ):
-        ui.html(
-            '<span style="font-size:12px;color:var(--text-3);font-weight:600;">'
-            '기준월</span>'
+    def _update_src_label():
+        if state["source"] == "fisis":
+            msg = '<span style="color:var(--success);">FISIS OpenAPI 실데이터</span>'
+        else:
+            key_note = '' if fisis_client.has_api_key() else ' · FSS_API_KEY 미설정'
+            code_note = '' if fisis_client.codes_ready() else ' · 코드 매핑 확정 필요(scripts/fisis_discover.py)'
+            state_note = '' if state["loaded"] else ' · [조회] 버튼을 눌러 불러오세요'
+            msg = (f'<span style="color:var(--accent);">샘플 데이터</span>'
+                   f'{key_note}{code_note}{state_note}')
+        src_label.content = (
+            f'<div style="font-size:11.5px;color:var(--text-4);margin:-6px 0 10px;">'
+            f'데이터 출처: {msg}</div>'
         )
-        month_select = ui.select(
-            options={i: m for i, m in enumerate(months_list)},
-            value=state["month_idx"],
-        ).props('outlined dense options-dense').classes('w-32')
+
+    _update_src_label()
+
+    # ── 컨트롤 바: 조회 기간(시작~종료) + 기준시점 + 조회 ─────────────────
+    _sel_props = 'outlined dense options-dense'
+    with ui.element('div').style(
+        'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;'
+    ):
+        ui.html('<span style="font-size:12px;color:var(--text-3);font-weight:600;">조회 기간</span>')
+        start_sel = ui.select(options=dict(_q_label), value=state["start_mm"]).props(_sel_props).classes('w-32')
+        ui.html('<span style="font-size:12px;color:var(--text-4);">~</span>')
+        end_sel = ui.select(options=dict(_q_label), value=state["end_mm"]).props(_sel_props).classes('w-32')
+        ui.html('<span style="font-size:12px;color:var(--text-3);font-weight:600;margin-left:6px;">기준시점</span>')
+        ref_sel = ui.select(options=dict(_q_label), value=state["ref_mm"]).props(_sel_props).classes('w-32')
+        load_btn = ui.button('조회').classes('btn-primary-mono')
+        load_spin = ui.html('')
+
+    def _sync_ref_options():
+        """기준시점 옵션을 현재 로드된 분기(또는 [시작,종료] 범위)로 제한·정렬."""
+        d0 = _data_for(state["selected_bank"])
+        bm = d0.get("base_months") or [
+            mm for mm in q_opts if state["start_mm"] <= mm <= state["end_mm"]
+        ]
+        ref_sel.set_options({mm: _q_label.get(mm, fisis_client.quarter_label(mm)) for mm in bm})
+        if state["ref_mm"] not in bm:
+            state["ref_mm"] = bm[-1] if bm else state["end_mm"]
+        ref_sel.value = state["ref_mm"]
 
     # ── 탭 ────────────────────────────────────────────────────────────────
     with ui.element('div').style(
@@ -412,41 +467,37 @@ def _build_native_dashboard(config: dict):
 
         def _render_detail():
             d = _data_for(state["selected_bank"])
-            series = d["series"]
-            months = d["months"]
-            idx = state["month_idx"]
-            latest = {k: v[idx] for k, v in series.items()}
-
-            # 카드 — 선택된 기준월 시점 값 (전월 대비 증감 표시)
+            series = d.get("series")
+            months = d.get("months") or []
             cards_grid.clear()
+            chart_section.clear()
+            if not series or not months:
+                with cards_grid:
+                    ui.html(
+                        '<div style="grid-column:1/-1;text-align:center;color:var(--text-4);'
+                        'font-size:12.5px;padding:24px 0;">조회 기간을 선택하고 [조회] 버튼을 눌러주세요.</div>'
+                    )
+                return
+
+            idx = _ref_idx(d)
+            # 카드 — 기준시점 값 (직전 분기 대비 증감)
             with cards_grid:
                 for ind in INDICATORS:
-                    prev = series[ind["key"]][idx - 1] if idx >= 1 else None
-                    ui.html(_indicator_card_html(ind, latest[ind["key"]], prev))
+                    vals = series.get(ind["key"]) or []
+                    cur = vals[idx] if idx < len(vals) else None
+                    prev = vals[idx - 1] if idx >= 1 and idx - 1 < len(vals) else None
+                    ui.html(_indicator_card_html(ind, cur, prev))
 
-            # 시계열 차트 — 기준월까지의 추이
-            trunc_series = {k: v[:idx + 1] for k, v in series.items()}
-            trunc_months = months[:idx + 1]
-            chart_section.clear()
+            # 시계열 차트 — 선택 기간 전체 추이
             with chart_section:
-                # 자본/자산건전성/수익성/유동성 4개 묶음
-                groups = [
-                    ("자본 적정성",    ["bis", "tier1"]),
-                    ("자산 건전성",    ["npl"]),
-                    ("수익성",         ["roa", "roe"]),
-                    ("유동성·예대율",  ["liquidity", "loan_dep"]),
-                ]
-                for title, keys in groups:
-                    ui.html(_svg_line_chart(title, keys, trunc_series, trunc_months))
+                for title, keys in CHART_GROUPS:
+                    ui.html(_svg_line_chart(title, keys, series, months))
 
         def _on_bank_change(e):
             state["selected_bank"] = e.args if isinstance(e.args, str) else bank_select.value
             _render_detail()
 
         bank_select.on('update:model-value', _on_bank_change)
-
-        # 초기 렌더
-        _render_detail()
 
     # ─────────────────────────────────────────────────────────────────────
     # ▶ 은행 비교 탭
@@ -471,18 +522,31 @@ def _build_native_dashboard(config: dict):
         def _render_compare():
             sel = ind_select.value
             ind = next(i for i in INDICATORS if i["key"] == sel)
-            idx = state["month_idx"]
             rows = []
+            has_any = False
             for b in BANKS:
                 d = _data_for(b["code"])
-                rows.append((b["name"], d["series"][sel][idx]))
+                vals = (d.get("series") or {}).get(sel) or []
+                idx = _ref_idx(d)
+                v = vals[idx] if idx < len(vals) else None
+                if v is not None:
+                    has_any = True
+                rows.append((b["name"], v))
 
-            # 정렬 (좋은 방향 우선)
+            if not has_any:
+                compare_chart.content = (
+                    '<div style="text-align:center;color:var(--text-4);font-size:12.5px;'
+                    'padding:24px 0;">조회 기간을 선택하고 [조회] 버튼을 눌러주세요.</div>'
+                )
+                compare_table.content = ''
+                return
+
+            # 정렬 (좋은 방향 우선) — 결측(None)은 뒤로
             reverse = (ind["good"] != "down")
-            rows.sort(key=lambda r: r[1], reverse=reverse)
+            rows.sort(key=lambda r: (r[1] is None, -(r[1] or 0) if reverse else (r[1] or 0)))
 
             # 막대그래프 (가로형)
-            max_v = max(r[1] for r in rows) or 1
+            max_v = max((r[1] for r in rows if r[1] is not None), default=0) or 1
             bars_html = ['<div style="display:flex;flex-direction:column;gap:6px;'
                          'padding:14px 18px;border:1px solid var(--border);'
                          'border-radius:var(--radius);background:var(--bg);'
@@ -494,7 +558,7 @@ def _build_native_dashboard(config: dict):
                 f'({"내림차순" if reverse else "오름차순"})</span></div>'
             )
             for name, v in rows:
-                pct = v / max_v * 100
+                pct = (v / max_v * 100) if v is not None else 0
                 status, color = _eval_status(ind, v)
                 bars_html.append(
                     '<div style="display:flex;align-items:center;gap:10px;font-size:12.5px;">'
@@ -536,8 +600,10 @@ def _build_native_dashboard(config: dict):
                     f'font-weight:500;border-bottom:1px solid var(--border);">'
                     f'{_html.escape(b["name"])}</td>'
                 ]
+                idx_b = _ref_idx(d)
                 for i in INDICATORS:
-                    v = d["series"][i["key"]][idx]
+                    vals = (d.get("series") or {}).get(i["key"]) or []
+                    v = vals[idx_b] if idx_b < len(vals) else None
                     status, color = _eval_status(i, v)
                     cells.append(
                         f'<td style="padding:8px 10px;font-size:12.5px;'
@@ -561,16 +627,55 @@ def _build_native_dashboard(config: dict):
         )
         _render_compare()
 
-    # 기준월 변경 시 두 탭 모두 갱신
-    def _on_month_change(_e):
-        state["month_idx"] = month_select.value
+    # ── 컨트롤 핸들러 ─────────────────────────────────────────────────────
+    def _on_start(_e):
+        state["start_mm"] = start_sel.value
+    start_sel.on('update:model-value', _on_start)
+
+    def _on_end(_e):
+        state["end_mm"] = end_sel.value
+    end_sel.on('update:model-value', _on_end)
+
+    def _on_ref(_e):
+        state["ref_mm"] = ref_sel.value
         _render_detail()
         _render_compare()
+    ref_sel.on('update:model-value', _on_ref)
 
-    month_select.on('update:model-value', _on_month_change)
+    async def _load_all():
+        s, e = state["start_mm"], state["end_mm"]
+        if s > e:
+            s, e = e, s
+        state["start_mm"], state["end_mm"] = s, e
+        start_sel.value, end_sel.value = s, e
+        load_btn.props(add='disable')
+        load_spin.content = '<span style="color:var(--text-4);font-size:12px;">조회 중…</span>'
+        try:
+            def _fetch_all():
+                return {b["code"]: _get_bank_indicators(api_key, b["code"], s, e) for b in BANKS}
+            cache = await nicegui_run.io_bound(_fetch_all)
+            state["cache"] = cache
+            state["loaded"] = True
+            srcs = {(d or {}).get("_source") for d in cache.values()}
+            state["source"] = "fisis" if "fisis" in srcs else "sample"
+            _sync_ref_options()
+            _update_src_label()
+            _render_detail()
+            _render_compare()
+            ui.notify('지표 조회 완료', type='positive', position='top')
+        except Exception as ex:
+            log.error("지표 조회 오류: %s", ex)
+            ui.notify(f'조회 오류: {ex}', type='negative', position='top')
+        finally:
+            load_btn.props(remove='disable')
+            load_spin.content = ''
 
-    # 초기 탭 (Detail) 활성화
+    load_btn.on_click(_load_all)
+
+    # 초기 탭 (Detail) 활성화 — 데이터는 [조회] 시 로드
     _switch_tab('detail')
+    _render_detail()
+    _render_compare()
 
 
 # ─── 인라인 SVG 라인차트 ─────────────────────────────────────────────────────
@@ -583,10 +688,10 @@ def _svg_line_chart(title: str, keys: list[str], series: dict, quarters: list[st
 
     colors = ["#f1f5f9", "#0ea5e9", "#a78bfa", "#22c55e", "#ef4444"]
 
-    # 전체 데이터 범위
+    # 전체 데이터 범위 (결측 None 제외)
     all_vals = []
     for k in keys:
-        all_vals.extend(series.get(k, []))
+        all_vals.extend(v for v in series.get(k, []) if v is not None)
     if not all_vals:
         return ""
     vmin, vmax = min(all_vals), max(all_vals)
@@ -631,16 +736,29 @@ def _svg_line_chart(title: str, keys: list[str], series: dict, quarters: list[st
     legend = []
     for ki, k in enumerate(keys):
         col = colors[ki % len(colors)]
-        pts = " ".join(f"{_x(i):.1f},{_y(v):.1f}" for i, v in enumerate(series[k]))
-        lines.append(
-            f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="1.8" />'
-        )
-        # 마지막 점 강조
-        last_x = _x(n - 1)
-        last_y = _y(series[k][-1])
-        lines.append(
-            f'<circle cx="{last_x:.1f}" cy="{last_y:.1f}" r="3" fill="{col}" />'
-        )
+        vals = series.get(k, [])
+        # 결측(None)은 선을 끊는다 — 연속 구간별 polyline
+        seg: list[str] = []
+        segments: list[list[str]] = []
+        for i, v in enumerate(vals):
+            if v is None:
+                if seg:
+                    segments.append(seg); seg = []
+                continue
+            seg.append(f"{_x(i):.1f},{_y(v):.1f}")
+        if seg:
+            segments.append(seg)
+        for pts in segments:
+            lines.append(
+                f'<polyline points="{" ".join(pts)}" fill="none" '
+                f'stroke="{col}" stroke-width="1.8" />'
+            )
+        # 마지막 유효 점 강조
+        last_i = next((i for i in range(len(vals) - 1, -1, -1) if vals[i] is not None), None)
+        if last_i is not None:
+            lines.append(
+                f'<circle cx="{_x(last_i):.1f}" cy="{_y(vals[last_i]):.1f}" r="3" fill="{col}" />'
+            )
         ind_label = next((i["label"] for i in INDICATORS if i["key"] == k), k)
         legend.append(
             f'<span style="display:inline-flex;align-items:center;gap:5px;'
