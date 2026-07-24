@@ -116,6 +116,29 @@ Risk Dashboard는 두 라인 모두에 존재 → **`dev/reporting_system`에 �
 3. 키/네트워크 없을 때 → mock으로 폴백(회귀 없음) 확인.
 4. Risk DashBoard → 감독원 보도·알림 실제 기사 목록 표시, 원문 링크 유효. 실패 시 네이버 폴백.
 
+## Q4 확정 설계 — 은행별 주요 지표 FISIS 실데이터 (구현 완료·코드확정 대기)
+
+사용자 결정: ① API 방식(인증키 보유), ② 지표세트 FINE 핵심경영지표 준거, ③ 분기 시계열 그래프,
+④ 시점 선택값 = 카드 표시 / 기간(시작~종료) 선택 = 시계열 구간.
+
+구현:
+- **`src/fisis_client.py` (신규)** — FISIS OpenAPI(`fisis.fss.or.kr/openapi/*.json`) 클라이언트.
+  서비스 `companySearch`/`statisticsListSearch`/`accountListSearch`/`statisticsInfoSearch`,
+  파라미터 `lang·auth·financeCd·listNo·term·startBaseMm·endBaseMm`, 인증키=`FSS_API_KEY`.
+  분기 유틸(`recent_quarters`=직전 완료분기 앵커, `quarter_label`), 방어적 파싱, `_dump_raw` 진단,
+  고수준 `fetch_bank_indicators(bank, keys, start_mm, end_mm)` → {series, latest, months, base_months}.
+  **서버사이드 호출** → 망분리 사용자도 조회 가능(Q5).
+- **`src/risk_indicator_panel.py`** — "은행별 주요 지표" 탭 재구성:
+  - INDICATORS를 FINE 준거 12종으로 교체(BIS·Tier1·CET1·NPL·연체율·ROA·ROE·NIM·원화예대율·LCR·총자산·당기순이익).
+  - **조회 기간(시작~종료 분기) + 기준시점(분기) 선택 + [조회] 버튼**. 카드=기준시점 값(직전분기 대비 증감),
+    시계열 차트=선택 기간 전체. `io_bound`로 비동기 조회, 결측(None) 안전 렌더.
+  - FISIS 성공 시 실데이터, 실패/코드미확정 시 **샘플 자동 폴백**(출처 배지로 상태 표시).
+- **`scripts/fisis_discover.py` (신규)** — 서버에서 1회 실행해 `financeCd`/`listNo`/`account_cd` 확정.
+
+**남은 1단계(사용자 서버에서):** `FSS_API_KEY` 설정 후 `python scripts/fisis_discover.py` 실행 →
+출력(은행 financeCd 목록 · 핵심경영지표 listNo · 계정코드 · 수치 응답 샘플)을 전달하면
+`fisis_client.BANK_FINANCE_CD` / `INDICATOR_SOURCE` / `_row_*` 파서를 확정한다. (이 샌드박스는 fss.or.kr 차단)
+
 ## 확정된 결정 (사용자 선택)
 1. **Risk Indicator 표시 방식** → **DIVE 화면 임베드 위주**. `diva.fss.or.kr` iframe을 기본 뷰로. X-Frame-Options 차단 대비 "새 창 열기" 버튼 상시 노출 + 기존 네이티브 지표 화면은 "참고 지표(샘플)" 보조 탭으로 유지(화면이 비지 않도록).
 2. **감독원 피드 구조** → **보도·알림 단일 최신 피드**. FSS menuNo=200747에서 최신 게시물을 하나의 목록으로.
