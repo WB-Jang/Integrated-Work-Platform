@@ -1,27 +1,69 @@
 """
 금융감독원(FSS) 관련 Risk Dashboard 패널.
 
-표시 항목:
-  - 금융감독원 보도자료
-  - 금융사고 공시
-  - 검사·감독 결과
-  - 금융회사 경영공시
+두 개의 탭으로 구성된다:
+  1. 감독원 뉴스 — 금융감독원 보도·알림 원문 피드(접속 실패 시 네이버 뉴스 폴백).
+  2. 네이버 키워드 검색 — 질문을 입력하면 관련 뉴스를 수집·재정렬·요약해 통합 답변을
+     생성한다(옛 '규제 동향' 메뉴의 뉴스 검색 기능을 이관).
 
-카테고리별 네이버 뉴스 검색 API로 관련 기사를 수집한다(원문 링크가 유효한 실제
-기사). NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 환경변수(HF Spaces Secrets)가 필요하다.
+NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 환경변수(HF Spaces Secrets)가 있으면 네이버
+뉴스 검색을 사용한다.
 """
 import os
 import re
+import asyncio
 import html as _html
 import datetime
+import time as _time
 from email.utils import parsedate_to_datetime
 
 import requests
 
-from nicegui import ui, run as nicegui_run
-from logger import get_logger
+from nicegui import ui, run as nicegui_run, app as nicegui_app
+from nicegui import context as _ng_context
+from logger import get_logger, set_current_user
+from ui_styles import progress_block_html, step_list_html, elapsed_ticker_script
 
 log = get_logger("fss_dashboard")
+
+# 뉴스 검색 진행 단계 라벨(규제 동향 뉴스 검색에서 이관)
+_YNA_STEPS = ['키워드 추출', '기사 수집', '유사도 재정렬', '기사 요약', '클러스터링', '통합 답변']
+
+# 출처별 태그 라벨(뉴스 검색 카드용)
+_SOURCE_TAG = {
+    "금융감독원": "FSS",
+    "한국은행":   "BOK",
+    "금융위원회": "FSC",
+    "연합뉴스":   "YNA",
+}
+
+# YYYYMMDD, YYYY.MM.DD, YYYY/MM/DD 등을 YYYY-MM-DD 로 정규화
+_DATE_DIGITS_RE = re.compile(r'^\s*(\d{4})[.\-/]?(\d{2})[.\-/]?(\d{2})\s*$')
+
+
+def _normalize_date(raw: str) -> tuple[str, bool]:
+    """입력 문자열을 YYYY-MM-DD 로 정규화. (정규화된 문자열, 유효 여부) 반환.
+    빈 문자열은 유효한 것으로 취급(선택 입력이므로)."""
+    raw = (raw or '').strip()
+    if not raw:
+        return '', True
+    m = _DATE_DIGITS_RE.match(raw)
+    if not m:
+        return raw, False
+    y, mo, d = m.groups()
+    try:
+        datetime.date(int(y), int(mo), int(d))
+    except ValueError:
+        return raw, False
+    return f'{y}-{mo}-{d}', True
+
+
+def _apply_current_user() -> None:
+    try:
+        v = (nicegui_app.storage.user.get('initials') or '-').strip().upper()
+    except Exception:
+        v = '-'
+    set_current_user(v or '-')
 
 # ── 대시보드 4개 카테고리 ─────────────────────────────────────────────────────
 # 각 카테고리를 네이버 뉴스 검색 질의어로 매핑한다.
@@ -186,22 +228,72 @@ def _fetch_dashboard_feed(api_key: str = None, count: int = 10) -> dict[str, lis
     return {_FSS_FEED_LABEL: naver}
 
 
-def build_fss_dashboard_panel(config: dict):
-    """Risk DashBoard 패널을 현재 NiceGUI 컨텍스트에 렌더링합니다."""
+def build_fss_dashboard_panel(config: dict, create_llm_fn=None):
+    """Risk DashBoard 패널을 현재 NiceGUI 컨텍스트에 렌더링합니다.
 
-    fss_api_key = config.get("fss_api_key", "").strip()
-    state = {"data": {}, "last_updated": None}
-
+    두 개 탭:
+      1. 감독원 뉴스 — 금융감독원 보도·알림 원문 피드.
+      2. 네이버 키워드 검색 — 질문 기반 뉴스 검색·요약(create_llm_fn 필요).
+    """
     # ── 헤더 ─────────────────────────────────────────────────────────────
     with ui.element('div').classes('page-head'):
         ui.html(
             '<div class="titles">'
             '<div class="page-title">Risk DashBoard</div>'
             '<div class="page-subtitle">'
-            '금융감독원 보도·알림 원문 — 최신 보도자료를 직접 조회합니다 (접속 실패 시 네이버 뉴스로 폴백).'
+            '금융감독원 보도·알림 원문과 키워드 기반 뉴스 검색을 한 곳에서 조회합니다.'
             '</div>'
             '</div>'
         )
+
+    # ── 탭 전환기 ────────────────────────────────────────────────────────
+    with ui.element('div').style(
+        'display:flex;gap:4px;border-bottom:1px solid var(--border);'
+        'margin:0 32px 4px;padding-top:4px;'
+    ):
+        tab_state = ['feed']  # 'feed' | 'news'
+        tab_btns: dict = {}
+        for k, label in [('feed', '감독원 뉴스'), ('news', '네이버 키워드 검색')]:
+            b = ui.element('button')
+            with b:
+                ui.html(f'<span>{label}</span>')
+            tab_btns[k] = b
+
+    feed_container = ui.element('div')
+    news_container = ui.element('div')
+
+    def _tab_btn_style(active: bool) -> str:
+        weight = '600' if active else '500'
+        color = 'var(--text)' if active else 'var(--text-3)'
+        border = 'var(--text)' if active else 'transparent'
+        return (
+            f'background:transparent;border:none;border-bottom:2px solid {border};'
+            f'padding:9px 14px;cursor:pointer;font-size:13px;font-weight:{weight};'
+            f'color:{color};transition:all .15s;'
+        )
+
+    def _switch_tab(key: str):
+        tab_state[0] = key
+        for k, b in tab_btns.items():
+            b.style(_tab_btn_style(k == key))
+        feed_container.style(f'display:{"block" if key == "feed" else "none"};')
+        news_container.style(f'display:{"block" if key == "news" else "none"};')
+
+    tab_btns['feed'].on('click', lambda _e: _switch_tab('feed'))
+    tab_btns['news'].on('click', lambda _e: _switch_tab('news'))
+
+    with feed_container:
+        _build_feed_tab(config)
+    with news_container:
+        _build_news_search_tab(config, create_llm_fn)
+
+    _switch_tab('feed')
+
+
+def _build_feed_tab(config: dict):
+    """감독원 뉴스 탭 — 금융감독원 보도·알림 원문 피드(실패 시 네이버 폴백)."""
+    fss_api_key = config.get("fss_api_key", "").strip()
+    state = {"data": {}, "last_updated": None}
 
     # ── 폴백(네이버) 자격증명 안내 배너 ───────────────────────────────────
     _naver_ready = bool(
@@ -376,3 +468,382 @@ def build_fss_dashboard_panel(config: dict):
                 '<div style="font-size:12px;color:var(--text-4);margin-top:4px;">'
                 '조회 버튼을 눌러 감독원 보도·알림을 불러오세요</div>'
             )
+
+
+# ── 뉴스 검색 탭(옛 '규제 동향'의 뉴스 검색 기능 이관) ────────────────────────
+def _build_news_search_tab(config: dict, create_llm_fn=None):
+    """네이버 키워드 검색 탭 — 질문 기반 뉴스 수집·재정렬·요약·통합답변.
+
+    옛 '규제 동향' 메뉴의 뉴스 검색(연합/네이버) 파이프라인을 그대로 이관한다.
+    기관별 모니터링·메일 발송 기능은 이관하지 않는다(요청에 따라 제외).
+    """
+    state = {'results': []}
+    _yna_ctl = {'task': None, 'busy': False}
+
+    if create_llm_fn is None:
+        with ui.element('div').style('padding:24px 32px;'):
+            ui.html(
+                '<div class="muted-text" style="color:var(--danger);">'
+                '뉴스 검색용 LLM이 구성되지 않았습니다. 관리자에게 문의하세요.</div>'
+            )
+        return
+
+    # ── 본문 — 좌측 필터 / 우측 결과 ─────────────────────────────────────
+    with ui.element('div').classes('filter-result-row'):
+
+        # ── 좌측: 검색 설정 ──────────────────────────────────────────────
+        with ui.element('div').classes('filter-col'):
+            ui.html(
+                '<div class="section-card-title">'
+                '<span class="material-symbols-outlined">tune</span>뉴스 검색'
+                '</div>'
+            )
+            keyword_input = ui.input(
+                label='질문 (LLM이 키워드 자동 추출)',
+                placeholder='예: 최근 한국은행 기준금리 인하 전망은 어떻습니까?',
+            ).props('outlined dense').classes('w-full mb-2')
+            date_from_input = ui.input(
+                label='시작일 (YYYY-MM-DD 또는 YYYYMMDD)', placeholder='예: 2025-01-01 또는 20250101',
+            ).props('outlined dense').classes('w-full mb-2')
+            date_from_err = ui.html('').style('margin:-4px 0 6px 2px;')
+            date_to_input = ui.input(
+                label='종료일 (YYYY-MM-DD 또는 YYYYMMDD)', placeholder='예: 2025-12-31 또는 20251231',
+            ).props('outlined dense').classes('w-full mb-2')
+            date_to_err = ui.html('').style('margin:-4px 0 6px 2px;')
+
+            def _make_date_blur_handler(inp, err_el):
+                def _on_blur():
+                    normalized, ok = _normalize_date(inp.value)
+                    if not ok:
+                        err_el.content = (
+                            '<div style="font-size:11px;color:var(--danger);">'
+                            '인식할 수 없는 날짜 형식입니다 (예: 2025-01-01, 20250101)</div>'
+                        )
+                        return
+                    inp.value = normalized
+                    err_el.content = ''
+                return _on_blur
+
+            date_from_input.on('blur', _make_date_blur_handler(date_from_input, date_from_err))
+            date_to_input.on('blur', _make_date_blur_handler(date_to_input, date_to_err))
+
+            yna_count_input = ui.number(
+                label='최대 조회 건수', value=10, min=1, max=30, step=1,
+            ).props('outlined dense').classes('w-full mb-3')
+
+            fetch_btn_yna = ui.button('검색 및 요약').classes('btn-primary-mono w-full')
+
+        # ── 우측: 결과 ───────────────────────────────────────────────────
+        with ui.element('div').classes('result-col'):
+            result_count_label = ui.html(
+                '<div class="muted-text">질문을 입력하고 검색을 클릭하세요.</div>'
+                '<div style="margin-top:8px;font-size:11.5px;color:var(--text-4);">'
+                '질문을 입력하면 관련 뉴스를 찾아 통합 답변을 생성합니다.</div>'
+            )
+            progress_area = ui.html('')
+            skeleton_area = ui.column().classes('w-full mt-2 gap-0')
+            skeleton_area.visible = False
+            result_container = ui.column().classes('w-full mt-2').style('flex:1; overflow:auto;')
+
+    ui.add_body_html(elapsed_ticker_script())
+
+    # NiceGUI 슬롯/클라이언트 컨텍스트를 태스크 내부에서 복원(create_task 유실 대응).
+    _client = _ng_context.client
+
+    def _spawn(coro):
+        async def _wrapped():
+            with _client:
+                await coro
+        return asyncio.create_task(_wrapped())
+
+    # ── 렌더링 ──────────────────────────────────────────────────────────
+    def _render_one_card(item: dict):
+        source = item.get('source', '')
+        tag_label = _SOURCE_TAG.get(source, source[:3])
+        title_safe = _html.escape(item.get('title') or '')
+        summary_safe = _html.escape(item.get('summary', '')).replace('\n', '<br>')
+        pub_date = item.get('published_date', '')
+        date_html = (
+            f'<span style="color:var(--text-4);font-size:11px;margin-left:auto;">'
+            f'{_html.escape(str(pub_date))}</span>'
+        ) if pub_date else ''
+
+        with ui.element('div').classes('reg-card'):
+            ui.html(
+                '<div class="reg-title">'
+                f'<span class="tag solid">{_html.escape(tag_label)}</span>'
+                f'<span style="color:var(--text-3);font-size:11.5px;">'
+                f'{_html.escape(source)}</span>'
+                f'<span style="flex:1;color:var(--text);font-weight:600;">{title_safe}</span>'
+                f'{date_html}'
+                '</div>'
+                f'<div class="reg-summary">{summary_safe}</div>'
+            )
+            ui.link('원문 보기 →', target=item.get('url') or '', new_tab=True).classes('reg-link')
+
+    def _render_results(results, clustered=False, question='', keywords=None,
+                        answer_summary='', approximate=False):
+        result_container.clear()
+        with result_container:
+            if not results:
+                ui.html(
+                    '<div style="text-align:center;color:var(--text-4);font-size:13px;'
+                    'padding:24px;background:var(--bg-elev);border:1px solid var(--border);'
+                    'border-radius:var(--radius);">검색 결과가 없습니다.</div>'
+                )
+                return
+
+            if approximate:
+                ui.html(
+                    '<div style="font-size:12.5px;color:var(--text-2);'
+                    'padding:10px 12px;margin-bottom:10px;background:var(--bg-elev);'
+                    'border:1px solid var(--text-3);border-left:3px solid var(--text-2);'
+                    'border-radius:var(--radius);">'
+                    '⚠ 질문과 <b>명확히 관련된 기사를 찾지 못했습니다.</b> '
+                    '아래는 의미상 가장 가까운 <b>참고용 근접 기사</b>이며, '
+                    '질문에 대한 직접적인 답이 아닐 수 있습니다.</div>'
+                )
+
+            if answer_summary:
+                kws_html = ''
+                if keywords:
+                    chips = ' '.join(
+                        f'<span class="tag solid" style="margin-right:4px;">{_html.escape(k)}</span>'
+                        for k in keywords
+                    )
+                    kws_html = (
+                        f'<div style="margin:6px 0 10px;font-size:11.5px;color:var(--text-3);">'
+                        f'추출 키워드: {chips}</div>'
+                    )
+                ans_html = _html.escape(answer_summary).replace('\n', '<br>')
+                q_html = _html.escape(question)
+                ui.html(
+                    '<div class="reg-card" style="border:1px solid var(--text-3);'
+                    'background:var(--bg-elev);">'
+                    '<div class="reg-title">'
+                    '<span class="tag solid">통합답변</span>'
+                    f'<span style="flex:1;color:var(--text);font-weight:700;">{q_html}</span>'
+                    '</div>'
+                    f'{kws_html}'
+                    f'<div class="reg-summary">{ans_html}</div>'
+                    '</div>'
+                )
+
+            if not clustered:
+                for item in results:
+                    _render_one_card(item)
+                return
+
+            clusters: dict[int, list[dict]] = {}
+            for item in results:
+                c = item.get('cluster', 0)
+                clusters.setdefault(c, []).append(item)
+
+            def _cluster_rank(c_idx: int) -> int:
+                its = clusters[c_idx]
+                return its[0].get('cluster_rank', 999) if its else 999
+
+            ordered = sorted(clusters.keys(), key=_cluster_rank)
+            for display_idx, c_idx in enumerate(ordered, start=1):
+                items_in_cluster = clusters[c_idx]
+                reps = [it for it in items_in_cluster if it.get('is_representative')]
+                if not reps:
+                    reps = items_in_cluster[:2]
+                total_in_cluster = len(items_in_cluster)
+                sim = items_in_cluster[0].get('cluster_similarity', 0.0)
+                ui.html(
+                    f'<div style="font-size:12px;font-weight:700;color:var(--text-3);'
+                    f'text-transform:uppercase;letter-spacing:.04em;'
+                    f'margin:16px 0 8px;padding:0 2px;">'
+                    f'클러스터 {display_idx} — 대표 기사 '
+                    f'(전체 {total_in_cluster}건 중 2건, 질문 유사도 {sim:.3f})</div>'
+                )
+                for item in reps:
+                    _render_one_card(item)
+
+    # ── 뉴스 검색 실행 ──────────────────────────────────────────────────
+    async def fetch_news_search():
+        _apply_current_user()
+        question = (keyword_input.value or '').strip()
+        if not question:
+            ui.notify('질문을 입력하세요.', type='warning', position='top')
+            return
+        log.info('Risk DashBoard 뉴스 검색 질의: %s', question[:120])
+
+        date_from_norm, from_ok = _normalize_date(date_from_input.value)
+        date_to_norm, to_ok = _normalize_date(date_to_input.value)
+        if not from_ok or not to_ok:
+            ui.notify('날짜 형식을 확인하세요 (예: 2025-01-01, 20250101).', type='warning', position='top')
+            return
+        date_from_input.value = date_from_norm
+        date_to_input.value = date_to_norm
+        date_from = date_from_norm or None
+        date_to = date_to_norm or None
+        count = int(yna_count_input.value or 10)
+        naver_client_id = config.get('naver_client_id', '').strip()
+        naver_client_secret = config.get('naver_client_secret', '').strip()
+
+        _start_ts = _time.time()
+        _yna_ctl['busy'] = True
+        _yna_ctl['task'] = asyncio.current_task()
+        fetch_btn_yna.text = '중지'
+        fetch_btn_yna.classes(add='is-stop')
+        result_container.clear()
+        result_count_label.content = ''
+        skeleton_area.visible = True
+        skeleton_area.clear()
+        with skeleton_area:
+            for _ in range(3):
+                ui.html('<div class="skeleton-card"></div>')
+
+        def _step(idx: int, extra: str = '') -> None:
+            elapsed_span = (
+                f'<span class="progress-block-elapsed" data-elapsed-since="{_start_ts}">'
+                '0초 경과</span>'
+            )
+            progress_area.content = (
+                step_list_html(_YNA_STEPS, idx)
+                + f'<div class="muted-text" style="display:flex;align-items:center;gap:8px;">'
+                f'{extra}{elapsed_span}</div>'
+            )
+
+        _step(0)
+
+        try:
+            llm = create_llm_fn()
+            from regulatory_agent import (
+                extract_search_queries,
+                search_news_by_keywords,
+                rerank_by_question,
+                summarize_update,
+                cluster_news_results,
+                summarize_clusters_for_question,
+            )
+
+            embed_url = config.get('legal_embedding', {}).get('url', 'http://127.0.0.1:8081')
+            embed_model = config.get('legal_embedding', {}).get('model', 'bge-m3')
+            embed_timeout = config.get('legal_embedding', {}).get('timeout', 45)
+
+            search_queries = await nicegui_run.io_bound(
+                extract_search_queries, question, llm, 5,
+            )
+            _step(1, f'검색 표현: {_html.escape(", ".join(search_queries))} · ')
+
+            fetch_count = min(count * 3, 30)
+            items = await nicegui_run.io_bound(
+                search_news_by_keywords, search_queries, date_from, date_to, fetch_count,
+                naver_client_id, naver_client_secret,
+            )
+
+            if items:
+                _step(2, f'{len(items)}건 후보 · ')
+                items = await nicegui_run.io_bound(
+                    rerank_by_question,
+                    question, items, embed_url, embed_model, embed_timeout, count,
+                )
+
+            sim_threshold = float(
+                config.get('legal_embedding', {}).get('relevance_threshold', 0.45)
+            )
+            approximate = False
+            scored = [it for it in items if 'rerank_score' in it]
+            if scored:
+                relevant = [it for it in scored if it['rerank_score'] >= sim_threshold]
+                if relevant:
+                    items = relevant
+                else:
+                    approximate = True
+                    items = scored[:min(3, len(scored))]
+            else:
+                lex_hit = [it for it in items if it.get('lexical_score', 0) > 0]
+                if lex_hit:
+                    items = lex_hit[:count]
+                else:
+                    approximate = True
+                    items = items[:min(3, len(items))]
+            if approximate:
+                for it in items:
+                    it['is_approximate'] = True
+
+            _step(3, f'{len(items)}건 · ')
+
+            def _summarize_all(items_, llm_):
+                out = []
+                for it in items_:
+                    try:
+                        s = summarize_update(it["source"], it["title"], it["url"], llm_)
+                    except Exception as exc:
+                        s = f"(요약 실패: {exc})\n출처: {it['url']}"
+                    out.append({**it, "summary": s})
+                return out
+
+            results = await nicegui_run.io_bound(_summarize_all, items, llm)
+
+            clustered = False
+            if len(results) >= 3:
+                _step(4)
+                results = await nicegui_run.io_bound(
+                    cluster_news_results,
+                    results, question, embed_url, embed_model, embed_timeout,
+                )
+                clustered = True
+
+            answer_summary = ''
+            if results:
+                _step(5)
+                answer_summary = await nicegui_run.io_bound(
+                    summarize_clusters_for_question, question, results, llm, approximate,
+                )
+
+            state['results'] = results
+            _render_results(
+                results,
+                clustered=clustered,
+                question=question,
+                keywords=search_queries,
+                answer_summary=answer_summary,
+                approximate=approximate,
+            )
+            n_clusters = len({it.get('cluster', 0) for it in results}) if clustered else 0
+            cluster_info = f' / {n_clusters}개 클러스터' if clustered else ''
+            kws_str = ', '.join(search_queries)
+            approx_note = (
+                ' — <b style="color:var(--text-2);">명확히 관련된 기사 없음(참고용 근접)</b>'
+                if approximate else ''
+            )
+            result_count_label.content = (
+                f'<div class="info-block"><b>뉴스 검색 결과: {len(results)}건{cluster_info}</b>'
+                f'{approx_note} (검색 표현: {_html.escape(kws_str)})</div>'
+            )
+            progress_area.content = ''
+            if results:
+                ui.notify(f'{len(results)}건 검색·요약 완료', type='positive', position='top')
+            else:
+                ui.notify('검색 결과가 없습니다. 질문이나 날짜를 조정해 보세요.', type='warning', position='top')
+        except asyncio.CancelledError:
+            log.info('뉴스 검색 취소됨')
+            progress_area.content = (
+                '<div class="muted-text" style="color:var(--warning);">검색을 중지했습니다.</div>'
+            )
+            ui.notify('검색을 중지했습니다.', type='warning', position='top')
+        except Exception as e:
+            log.error('뉴스 검색 오류: %s', e)
+            ui.notify(f'검색 오류: {e}', type='negative', position='top')
+            progress_area.content = (
+                '<div class="muted-text" style="color:var(--danger);">검색 실패</div>'
+            )
+        finally:
+            skeleton_area.visible = False
+            _yna_ctl['busy'] = False
+            _yna_ctl['task'] = None
+            fetch_btn_yna.text = '검색 및 요약'
+            fetch_btn_yna.classes(remove='is-stop')
+
+    def _on_yna_click():
+        if _yna_ctl['busy']:
+            if _yna_ctl['task'] is not None:
+                _yna_ctl['task'].cancel()
+            return
+        _spawn(fetch_news_search())
+
+    fetch_btn_yna.on_click(_on_yna_click)
