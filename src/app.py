@@ -68,7 +68,6 @@ from summarizer import hierarchical_summarize, compress_document, create_compres
 from reporting_panel import build_reporting_panel
 from legal_panel import build_legal_panel
 from outlook_panel import build_outlook_panel
-from regulatory_panel import build_regulatory_panel
 from admin_panel import build_admin_panel
 from fss_dashboard_panel import build_fss_dashboard_panel
 from risk_indicator_panel import build_risk_indicator_panel
@@ -575,7 +574,6 @@ _NAV_BIZ   = [
     ('convert',    'PDF 변환', 'picture_as_pdf'),
     ('reporting',  '보고서',   'assignment'),
     ('outlook',    '메일분석', 'mail'),
-    ('regulatory', '규제동향', 'monitoring'),
     ('rates',      '금리모니터', 'trending_up'),
 ]
 _NAV_DASH  = [
@@ -595,7 +593,7 @@ _NAV_GROUPS_META = [
 ]
 
 # LLM 백엔드가 필요한 탭 — 미연결 시 진입하면 안내 팝업을 띄운다.
-_LLM_TAB_KEYS = {'home', 'analysis', 'summary', 'qa', 'legal', 'outlook', 'regulatory', 'agent'}
+_LLM_TAB_KEYS = {'home', 'analysis', 'summary', 'qa', 'legal', 'outlook', 'agent'}
 
 
 def _top_tab_html(key: str, label: str, icon: str, active: bool = False) -> str:
@@ -827,7 +825,7 @@ def _render_home_dashboard(container, state: dict) -> None:
         {_kpi_card('규제 조회', reg_today,
             '<span style="color:#f59e0b;">오늘 조회</span>' if reg_today else
             '<span style="color:rgba(148,163,184,.4);">오늘 조회 없음</span>',
-            '#f59e0b', 'regulatory')}
+            '#f59e0b', 'risk_dashboard')}
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr 300px;gap:18px;">
@@ -863,13 +861,13 @@ def _render_home_dashboard(container, state: dict) -> None:
             <div style="font-size:10px;color:rgba(148,163,184,.4);">AI 자동 초안 생성</div>
           </div>
           <div style="background:rgba(245,158,11,.04);border:1px solid rgba(245,158,11,.15);
-            border-radius:12px;padding:18px;cursor:pointer;" data-goto="regulatory">
+            border-radius:12px;padding:18px;cursor:pointer;" data-goto="risk_dashboard">
             <div style="width:34px;height:34px;border-radius:9px;background:rgba(245,158,11,.1);
               display:flex;align-items:center;justify-content:center;margin-bottom:10px;">
-              <span class="material-symbols-outlined" style="font-size:18px;color:#f59e0b;">monitoring</span>
+              <span class="material-symbols-outlined" style="font-size:18px;color:#f59e0b;">monitor_heart</span>
             </div>
-            <div style="font-size:12px;font-weight:600;color:#f1f5f9;margin-bottom:3px;">규제 동향</div>
-            <div style="font-size:10px;color:rgba(148,163,184,.4);">오늘 {reg_today}건 조회</div>
+            <div style="font-size:12px;font-weight:600;color:#f1f5f9;margin-bottom:3px;">Risk DashBoard</div>
+            <div style="font-size:10px;color:rgba(148,163,184,.4);">감독원 뉴스·키워드 검색</div>
           </div>
         </div>
 
@@ -2469,15 +2467,6 @@ def main_page(request: Request):
             # 답장 초안 생성 시 접속 IP 유저 본인의 페르소나만 적용
             build_outlook_panel(_config, _llm_outlook, persona_block=persona_block)
 
-        # ── 규제 동향 ─────────────────────────────────────────────────────
-        panel_regulatory = ui.element('div').classes('panel')
-        panels['regulatory'] = panel_regulatory
-        panel_regulatory.style('display:none;')
-        with panel_regulatory:
-            def _llm_reg(model_id=None):
-                return create_llm(model_id=state.get('selected_model_id'))
-            build_regulatory_panel(_config, _llm_reg)
-
         # ── 금리 모니터 ───────────────────────────────────────────────────
         panel_rates = ui.element('div').classes('panel')
         panels['rates'] = panel_rates
@@ -2504,7 +2493,9 @@ def main_page(request: Request):
         panels['risk_dashboard'] = panel_risk_dashboard
         panel_risk_dashboard.style('display:none;')
         with panel_risk_dashboard:
-            build_fss_dashboard_panel(_config)
+            def _llm_riskdash(model_id=None):
+                return create_llm(model_id=state.get('selected_model_id'))
+            build_fss_dashboard_panel(_config, _llm_riskdash)
 
         # ── Risk Indicator Dashboard ──────────────────────────────────
         panel_risk_indicator = ui.element('div').classes('panel')

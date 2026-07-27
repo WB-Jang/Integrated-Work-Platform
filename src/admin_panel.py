@@ -630,7 +630,6 @@ def build_admin_panel(config: dict, nav_ctx: dict = None):
         'convert':        ('picture_as_pdf', 'Word/PPT → PDF 일괄 변환'),
         'reporting':      ('assignment',     'AI 자동 보고서 작성'),
         'outlook':        ('mail',           'Outlook 연동 메일 분석'),
-        'regulatory':     ('monitoring',     '금감원·한은·금융위 동향'),
         'rates':          ('trending_up',    'kofiabond 금리(CD91·채권시가평가) 조회'),
         'risk_dashboard': ('monitor_heart',  'FSS Open API 리스크 현황'),
         'risk_indicator': ('insights',       '은행 재무 건전성 지표 모니터링'),
