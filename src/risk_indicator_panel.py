@@ -363,19 +363,61 @@ def _build_native_dashboard(config: dict):
 
     _update_src_label()
 
-    # ── 컨트롤 바: 조회 기간(시작~종료) + 기준시점 + 조회 ─────────────────
+    # ── 조회 방식 선택 (기준시점 스냅샷 / 시계열 추이) ────────────────────
+    # 두 방식의 선택기를 동시에 보이면 혼란스러우므로, 방식을 먼저 고르면
+    # 해당 방식의 입력만 노출한다.
+    state.setdefault("mode", "point")   # 'point'(기준시점) | 'series'(시계열)
     _sel_props = 'outlined dense options-dense'
+
+    with ui.element('div').style(
+        'display:flex;gap:4px;margin-bottom:10px;'
+    ):
+        mode_btns: dict = {}
+        for k, label in [('point', '기준시점 (한 분기 스냅샷)'), ('series', '시계열 (기간 추이)')]:
+            mb = ui.element('button').style('cursor:pointer;')
+            with mb:
+                ui.html(f'<span>{label}</span>')
+            mode_btns[k] = mb
+
+    def _mode_btn_style(active: bool) -> str:
+        w = '600' if active else '500'
+        c = 'var(--text)' if active else 'var(--text-3)'
+        b = 'var(--text)' if active else 'transparent'
+        return (f'background:transparent;border:none;border-bottom:2px solid {b};'
+                f'padding:7px 12px;cursor:pointer;font-size:12.5px;font-weight:{w};'
+                f'color:{c};transition:all .15s;')
+
     with ui.element('div').style(
         'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;'
     ):
-        ui.html('<span style="font-size:12px;color:var(--text-3);font-weight:600;">조회 기간</span>')
-        start_sel = ui.select(options=dict(_q_label), value=state["start_mm"]).props(_sel_props).classes('w-32')
-        ui.html('<span style="font-size:12px;color:var(--text-4);">~</span>')
-        end_sel = ui.select(options=dict(_q_label), value=state["end_mm"]).props(_sel_props).classes('w-32')
-        ui.html('<span style="font-size:12px;color:var(--text-3);font-weight:600;margin-left:6px;">기준시점</span>')
-        ref_sel = ui.select(options=dict(_q_label), value=state["ref_mm"]).props(_sel_props).classes('w-32')
+        # 기준시점 입력 (mode=point)
+        point_box = ui.element('div').style('display:flex;align-items:center;gap:8px;')
+        with point_box:
+            ui.html('<span style="font-size:12px;color:var(--text-3);font-weight:600;">기준시점</span>')
+            ref_sel = ui.select(options=dict(_q_label), value=state["ref_mm"]).props(_sel_props).classes('w-32')
+        # 시계열 입력 (mode=series)
+        period_box = ui.element('div').style('display:flex;align-items:center;gap:8px;')
+        with period_box:
+            ui.html('<span style="font-size:12px;color:var(--text-3);font-weight:600;">조회 기간</span>')
+            start_sel = ui.select(options=dict(_q_label), value=state["start_mm"]).props(_sel_props).classes('w-32')
+            ui.html('<span style="font-size:12px;color:var(--text-4);">~</span>')
+            end_sel = ui.select(options=dict(_q_label), value=state["end_mm"]).props(_sel_props).classes('w-32')
         load_btn = ui.button('조회').classes('btn-primary-mono')
         load_spin = ui.html('')
+
+    def _apply_mode(mode: str):
+        state["mode"] = mode
+        for k, b in mode_btns.items():
+            b.style(_mode_btn_style(k == mode))
+        point_box.style(f'display:{"flex" if mode == "point" else "none"};align-items:center;gap:8px;')
+        period_box.style(f'display:{"flex" if mode == "series" else "none"};align-items:center;gap:8px;')
+        # 이미 로드된 데이터가 있으면 출력만 갱신
+        if state.get("loaded"):
+            _render_detail()
+            _render_compare()
+
+    for k, b in mode_btns.items():
+        b.on('click', lambda _e, kk=k: _apply_mode(kk))
 
     def _sync_ref_options():
         """기준시점 옵션을 현재 로드된 분기(또는 [시작,종료] 범위)로 제한·정렬."""
@@ -475,23 +517,34 @@ def _build_native_dashboard(config: dict):
                 with cards_grid:
                     ui.html(
                         '<div style="grid-column:1/-1;text-align:center;color:var(--text-4);'
-                        'font-size:12.5px;padding:24px 0;">조회 기간을 선택하고 [조회] 버튼을 눌러주세요.</div>'
+                        'font-size:12.5px;padding:24px 0;">기준시점/기간을 선택하고 [조회] 버튼을 눌러주세요.</div>'
                     )
                 return
 
-            idx = _ref_idx(d)
-            # 카드 — 기준시점 값 (직전 분기 대비 증감)
-            with cards_grid:
-                for ind in INDICATORS:
-                    vals = series.get(ind["key"]) or []
-                    cur = vals[idx] if idx < len(vals) else None
-                    prev = vals[idx - 1] if idx >= 1 and idx - 1 < len(vals) else None
-                    ui.html(_indicator_card_html(ind, cur, prev))
+            is_point = state.get("mode", "point") == "point"
+            # 조회 방식에 따라 카드(기준시점) / 차트(시계열) 중 하나만 노출
+            cards_grid.style(
+                'display:' + ('grid' if is_point else 'none') + ';'
+                'grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));'
+                'gap:12px;margin-bottom:20px;'
+            )
+            chart_section.style(
+                'display:' + ('grid' if not is_point else 'none') + ';'
+                'grid-template-columns:repeat(auto-fit, minmax(360px, 1fr));gap:12px;'
+            )
 
-            # 시계열 차트 — 선택 기간 전체 추이
-            with chart_section:
-                for title, keys in CHART_GROUPS:
-                    ui.html(_svg_line_chart(title, keys, series, months))
+            if is_point:
+                idx = _ref_idx(d)
+                with cards_grid:
+                    for ind in INDICATORS:
+                        vals = series.get(ind["key"]) or []
+                        cur = vals[idx] if idx < len(vals) else None
+                        prev = vals[idx - 1] if idx >= 1 and idx - 1 < len(vals) else None
+                        ui.html(_indicator_card_html(ind, cur, prev))
+            else:
+                with chart_section:
+                    for title, keys in CHART_GROUPS:
+                        ui.html(_svg_line_chart(title, keys, series, months))
 
         def _on_bank_change(e):
             state["selected_bank"] = e.args if isinstance(e.args, str) else bank_select.value
@@ -536,7 +589,7 @@ def _build_native_dashboard(config: dict):
             if not has_any:
                 compare_chart.content = (
                     '<div style="text-align:center;color:var(--text-4);font-size:12.5px;'
-                    'padding:24px 0;">조회 기간을 선택하고 [조회] 버튼을 눌러주세요.</div>'
+                    'padding:24px 0;">기준시점/기간을 선택하고 [조회] 버튼을 눌러주세요.</div>'
                 )
                 compare_table.content = ''
                 return
@@ -643,11 +696,20 @@ def _build_native_dashboard(config: dict):
     ref_sel.on('update:model-value', _on_ref)
 
     async def _load_all():
-        s, e = state["start_mm"], state["end_mm"]
-        if s > e:
-            s, e = e, s
-        state["start_mm"], state["end_mm"] = s, e
-        start_sel.value, end_sel.value = s, e
+        # 조회 방식에 따라 가져올 분기 범위를 정한다.
+        if state.get("mode", "point") == "point":
+            # 기준시점: 선택 분기 + 직전 대비 표시를 위해 앞 몇 분기까지 포함해 로드
+            e = state["ref_mm"] = ref_sel.value or state["ref_mm"]
+            idx = q_opts.index(e) if e in q_opts else len(q_opts) - 1
+            s = q_opts[max(0, idx - 7)]
+        else:
+            s, e = state["start_mm"], state["end_mm"]
+            if s > e:
+                s, e = e, s
+            state["start_mm"], state["end_mm"] = s, e
+            start_sel.value, end_sel.value = s, e
+            # 시계열 모드에서 카드/비교가 참조할 기준시점은 기간의 끝
+            state["ref_mm"] = e
         load_btn.props(add='disable')
         load_spin.content = '<span style="color:var(--text-4);font-size:12px;">조회 중…</span>'
         try:
@@ -672,7 +734,8 @@ def _build_native_dashboard(config: dict):
 
     load_btn.on_click(_load_all)
 
-    # 초기 탭 (Detail) 활성화 — 데이터는 [조회] 시 로드
+    # 초기 조회 방식(기준시점)·탭(Detail) 활성화 — 데이터는 [조회] 시 로드
+    _apply_mode('point')
     _switch_tab('detail')
     _render_detail()
     _render_compare()
