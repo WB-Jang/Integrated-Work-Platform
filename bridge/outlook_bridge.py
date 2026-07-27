@@ -151,6 +151,17 @@ class _Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send_json({"ok": False, "error": f"Outlook 연결 실패: {e}"}, 500)
 
+        if path == "/open-email":
+            if not self._check_token(qs):
+                return self._send_json({"ok": False, "error": "unauthorized"}, 401)
+            try:
+                from outlook_agent import open_email
+                ok = open_email(qs.get("entry_id", [""])[0], qs.get("store_id", [""])[0])
+                return self._send_json({"ok": bool(ok)})
+            except Exception as e:
+                _log(f"/open-email 오류: {e}")
+                return self._send_json({"ok": False, "error": str(e)}, 500)
+
         if path == "/emails":
             if not self._check_token(qs):
                 return self._send_json({"error": "unauthorized"}, 401)
