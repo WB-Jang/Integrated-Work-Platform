@@ -13,6 +13,7 @@ import html as _html
 from pathlib import Path
 
 from nicegui import ui, app, events, run as nicegui_run
+from nicegui import context as _ng_context
 
 from reporting_runner import (
     REPORT_CONFIGS, run_report, get_upload_dir,
@@ -52,6 +53,17 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
         "pending_spec": None,      # 대기 중인 입력 요청 spec
         "_from_ui": None,          # UI→워커 답변 큐 (실행 중에만 설정)
     }
+
+    # create_task 로 핸들러를 띄우면 NiceGUI 슬롯/클라이언트 컨텍스트가 유실되어
+    # ui.timer / ui.notify / UI 생성이 "slot stack is empty" 로 실패한다. 빌드 시점
+    # client 를 캡처해 태스크 내부를 'with client:' 로 감싸 컨텍스트를 복원한다.
+    _client = _ng_context.client
+
+    def _spawn(coro):
+        async def _wrapped():
+            with _client:
+                await coro
+        return asyncio.create_task(_wrapped())
 
     # ── 헤더 ─────────────────────────────────────────────────────────────
     with ui.element('div').classes('page-head'):
@@ -503,8 +515,8 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
         assistant_chat.clear()
         _render_assistant_chat()
 
-    assistant_send_btn.on('click', lambda _e: asyncio.create_task(send_assistant_message()))
-    assistant_clear_btn.on('click', lambda _e: asyncio.create_task(clear_assistant_chat()))
+    assistant_send_btn.on('click', lambda _e: _spawn(send_assistant_message()))
+    assistant_clear_btn.on('click', lambda _e: _spawn(clear_assistant_chat()))
     if not llm_status.is_available():
         assistant_send_btn.props('disabled')
         assistant_send_btn.classes(add='is-disabled')
@@ -513,7 +525,7 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
         args = _e.args if isinstance(_e.args, dict) else {}
         if args.get('shiftKey') or args.get('isComposing'):
             return  # 줄바꿈 / 한글 IME 조합 중
-        asyncio.create_task(send_assistant_message())
+        _spawn(send_assistant_message())
     assistant_input.on('keydown.enter', _on_assistant_enter)
 
     def update_log(text: str):
@@ -747,7 +759,7 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
                     b.classes('btn-primary-mono').props('dense no-caps')
                 else:
                     b.props('outline dense no-caps')
-                b.on('click', lambda _e, k=vkey: asyncio.create_task(select_report(k)))
+                b.on('click', lambda _e, k=vkey: _spawn(select_report(k)))
 
     async def select_report(key: str):
         state['selected'] = key
@@ -785,7 +797,7 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
     for _disp_id, _btn in report_btns.items():
         report_btns[_disp_id].on(
             'click',
-            lambda _e, k=_btn._default_key: asyncio.create_task(select_report(k)),
+            lambda _e, k=_btn._default_key: _spawn(select_report(k)),
         )
 
     def _validate_and_build_params(cfg: dict):
@@ -1025,7 +1037,7 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
 
                 def _confirm():
                     dlg.close()
-                    asyncio.create_task(execute_report(report_key, cfg, params))
+                    _spawn(execute_report(report_key, cfg, params))
 
                 ui.button('실행', on_click=_confirm).classes('btn-primary-mono')
         dlg.open()
