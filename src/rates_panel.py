@@ -15,6 +15,8 @@ import html as _html
 import asyncio
 import calendar
 import datetime
+import json as _json
+import re as _re
 
 from nicegui import ui, run as nicegui_run
 
@@ -41,6 +43,11 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
     패널 열람 시 오늘자 데이터가 없을 때 자동 조회한다.
     """
     pstate = {"loading": False}
+
+    # 콜금리(Call rate)는 사용자 메일에서 읽어온다 — 서버 배포 구조이므로
+    # 사용자 PC의 로컬 Outlook 브릿지(outlook_bridge.exe)를 브라우저가 호출한다.
+    bridge_url = (config.get('outlook_bridge_url') or 'http://127.0.0.1:8899').rstrip('/')
+    bridge_token = config.get('outlook_bridge_token', '') or ''
 
     # ── 헤더 ─────────────────────────────────────────────────────────────
     with ui.element('div').classes('page-head'):
@@ -113,8 +120,10 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
 
     # ── 본문 컨테이너 ────────────────────────────────────────────────────
     content = ui.element('div').style(
-        'padding:20px 32px;flex:1;overflow-y:auto;'
+        'padding:20px 32px 0;flex:1;overflow-y:auto;'
     )
+    # 콜금리(메일) 전용 슬롯 — content 를 갱신해도 유지되도록 별도 컨테이너.
+    call_rate_slot = ui.element('div').style('padding:4px 32px 24px;')
 
     # ── 렌더링 ───────────────────────────────────────────────────────────
     def _render_empty(message: str, tone: str = "info"):
@@ -262,11 +271,107 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
                 "표시할 금리 데이터가 없습니다.<br>상단 <b>갱신</b> 버튼을 눌러 조회하세요."
             )
 
+    # ── 콜금리(Call rate) — 사용자 메일에서 조회 ─────────────────────────
+    _CALL_RE = _re.compile(r'(\d{1,2}\.\d{2,4})')
+
+    async def _bridge_get(path: str, params: dict, timeout: float = 30):
+        """브라우저(사용자 PC)에서 127.0.0.1 브릿지로 GET. dict 반환."""
+        q = dict(params)
+        if bridge_token:
+            q['token'] = bridge_token
+        js = (
+            "try {"
+            f"  const base = {_json.dumps(bridge_url)};"
+            f"  const params = new URLSearchParams({_json.dumps({k: str(v) for k, v in q.items()})});"
+            f"  const r = await fetch(base + {_json.dumps(path)} + '?' + params.toString());"
+            "  if (!r.ok) return {error: 'HTTP ' + r.status};"
+            "  return await r.json();"
+            "} catch (e) { return {error: '브릿지 연결 실패: ' + String(e)}; }"
+        )
+        res = await ui.run_javascript(js, timeout=timeout)
+        return res if isinstance(res, dict) else {'error': '브릿지 응답 없음'}
+
+    def _parse_call_rate(subject: str):
+        m = _CALL_RE.search(subject or '')
+        return m.group(1) if m else None
+
+    async def _open_call_mail(entry_id: str, store_id: str):
+        res = await _bridge_get('/open-email', {'entry_id': entry_id, 'store_id': store_id})
+        if res.get('ok'):
+            ui.notify('메일을 열었습니다.', type='positive', position='top')
+        else:
+            ui.notify(f"메일 열기 실패: {res.get('error', '브릿지 확인')}",
+                      type='negative', position='top')
+
+    def _render_call_rate(items: list, err: "str | None" = None):
+        call_rate_slot.clear()
+        with call_rate_slot:
+            ui.html(
+                '<div style="font-size:12px;color:var(--text-3);font-weight:600;'
+                'margin:6px 0 8px;">콜금리 (Call rate) · 메일에서 조회</div>'
+            )
+            if err:
+                ui.html(
+                    '<div style="font-size:12px;color:var(--text-4);">'
+                    'Outlook 브릿지 미연결 — 사용자 PC에서 <b>outlook_bridge.exe</b> 실행 필요 '
+                    f'<span style="color:var(--text-4);">({_html.escape(str(err))})</span></div>'
+                )
+                return
+            if not items:
+                ui.html(
+                    '<div style="font-size:12px;color:var(--text-4);">'
+                    '선택한 날짜에 제목에 "Call rate"가 포함된 메일이 없습니다.</div>'
+                )
+                return
+            for it in items:
+                rate = _parse_call_rate(it.get('subject'))
+                subj = _html.escape(it.get('subject') or '')
+                date = _html.escape(str(it.get('date') or ''))
+                with ui.element('div').style(
+                    'background:var(--bg);border:1px solid var(--border);border-radius:12px;'
+                    'padding:16px 20px;margin-bottom:10px;display:flex;align-items:center;'
+                    'gap:20px;flex-wrap:wrap;'
+                ):
+                    ui.html(
+                        '<div><div style="font-size:12px;color:var(--text-3);font-weight:600;'
+                        'margin-bottom:4px;">Call rate</div>'
+                        '<div style="font-size:28px;font-weight:700;color:var(--text);'
+                        'font-variant-numeric:tabular-nums;line-height:1.1;">'
+                        f'{rate or "—"}'
+                        + ('<span style="font-size:15px;font-weight:500;color:var(--text-3);'
+                           'margin-left:3px;">%</span>' if rate else '')
+                        + '</div></div>'
+                        f'<div style="flex:1;min-width:220px;font-size:12px;color:var(--text-3);'
+                        f'line-height:1.5;">{subj}'
+                        f'<div style="font-size:11px;color:var(--text-4);margin-top:3px;">{date}</div>'
+                        '</div>'
+                    )
+                    ob = ui.button('메일 열기').props('outline dense no-caps')
+                    ob.on_click(
+                        lambda _e=None, eid=it.get('entry_id', ''), sid=it.get('store_id', ''):
+                        _open_call_mail(eid, sid)
+                    )
+
+    async def _load_call_rate(ymd: str):
+        try:
+            d = f'{ymd[:4]}-{ymd[4:6]}-{ymd[6:8]}'
+            res = await _bridge_get('/emails', {'start': d, 'end': d, 'attachments': '0'})
+            if res.get('error'):
+                _render_call_rate([], err=res['error'])
+                return
+            emails = res.get('emails') or []
+            matches = [e for e in emails if 'call rate' in (e.get('subject') or '').lower()]
+            _render_call_rate(matches)
+        except Exception as ce:
+            log.warning('콜금리 조회 오류: %s', ce)
+            _render_call_rate([], err=str(ce))
+
     # ── 조회 핸들러 ──────────────────────────────────────────────────────
     async def _do_refresh(force: bool):
         if pstate["loading"]:
             return
         pstate["loading"] = True
+        ymd = _selected_ymd()
         # on-show 훅에서 asyncio.create_task 로 호출되면 slot/client 컨텍스트가
         # 없어 ui.notify 등이 실패한다. content 컨테이너 슬롯을 명시적으로 진입해
         # 배경 task 에서도 UI 갱신이 가능하도록 한다.
@@ -277,7 +382,6 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
                 '<span style="color:var(--text-4);font-size:12px;">조회 중…</span>'
             )
             try:
-                ymd = _selected_ymd()
                 data = await nicegui_run.io_bound(
                     rates_scraper.get_rates, force, ymd
                 )
@@ -308,6 +412,8 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
                 progress_bar.visible = False
                 refresh_btn.props(remove='disable')
                 pstate["loading"] = False
+            # 콜금리는 kofiabond 성공/실패와 무관하게 선택 날짜 메일에서 조회
+            await _load_call_rate(ymd)
 
     refresh_btn.on_click(lambda: asyncio.create_task(_do_refresh(force=True)))
 
