@@ -700,41 +700,25 @@ def build_reporting_panel(config: dict, create_llm_fn, app_state: dict):
                         var_inp.value = '{}'
                     return
 
+                # 금리 입력은 [실행] 시 오른쪽 채팅창에서 계좌별로 진행한다(대화형).
+                # 여기서는 대상 계좌만 미리 보여주고, var_rates_json 은 비워 둔다
+                # (값이 채워져 있으면 러너가 채팅 입력을 건너뛰므로).
+                var_inp = param_inputs.get('var_rates_json')
+                if var_inp:
+                    var_inp.value = ''
                 fx_step_el.content = step_list_html(_FX5260_STEPS, 1)
                 with fx_list_area:
                     ui.html(
                         f'<div class="muted-text" style="margin:6px 0;">'
-                        f'금리 입력 필요 계좌: <b>{len(accounts)}건</b></div>'
+                        f'금리 입력 필요 계좌: <b>{len(accounts)}건</b> — '
+                        f'[실행]을 누르면 오른쪽 채팅창에서 계좌별 기준금리를 순서대로 입력합니다.</div>'
                     )
                     for acct in accounts:
-                        with ui.row().classes('w-full items-center gap-2 no-wrap').style('margin-bottom:2px;'):
-                            ui.html(
-                                f'<span style="font-size:12px;color:var(--text-2);flex:1;'
-                                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
-                                f'{_html.escape(str(acct))}</span>'
-                            )
-                            num = ui.number(label='금리(%)', value=0).props(
-                                'outlined dense'
-                            ).style('width:130px;')
-                            fx_state['rate_inputs'][str(acct)] = num
-
-                    apply_btn = ui.button('금리 적용').classes('btn-primary-mono w-full mt-2')
-
-                    def _apply_rates():
-                        rates = {}
-                        for acct, num in fx_state['rate_inputs'].items():
-                            try:
-                                rates[acct] = float(num.value or 0)
-                            except (TypeError, ValueError):
-                                rates[acct] = 0.0
-                        var_inp = param_inputs.get('var_rates_json')
-                        if var_inp:
-                            var_inp.value = json.dumps(rates, ensure_ascii=False)
-                        fx_step_el.content = step_list_html(_FX5260_STEPS, 3)
-                        ui.notify('변동금리가 적용되었습니다. [실행]으로 보고서를 생성하세요.',
-                                  type='positive', position='top')
-
-                    apply_btn.on_click(_apply_rates)
+                        ui.html(
+                            f'<div style="font-size:12px;color:var(--text-2);'
+                            f'padding:2px 0;overflow:hidden;text-overflow:ellipsis;'
+                            f'white-space:nowrap;">· {_html.escape(str(acct))}</div>'
+                        )
 
             analyze_btn.on_click(_do_analyze)
 
