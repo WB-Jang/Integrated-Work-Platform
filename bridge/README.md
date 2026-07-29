@@ -66,6 +66,11 @@ IWP 서버 `config.json`(선택):
 - **회신 초안이 안 열림**: Outlook 보안 정책(프로그래밍 방식 접근) 설정을 확인.
 - **"메일 열기" 시 `HTTP 404`**: 실행 중인 exe가 `/open-email` 미지원 **구버전(v1.1 이전)** 입니다.
   최신 소스로 `build_bridge.bat`을 다시 실행해 exe를 재빌드·재배포하세요.
+- **exe 실행/조회 시 `No module named 'outlook_agent'`(또는 `logger`)**: 브릿지는 `..\src` 의
+  `outlook_agent`·`logger` 를 재사용하는데, 이 임포트가 함수 내부 지연 임포트라 PyInstaller가
+  자동 포함하지 못해 생기는 문제입니다. `build_bridge.bat` 에 `--hidden-import outlook_agent`
+  `--hidden-import logger` 가 포함된 최신 버전으로 **다시 빌드**하면 해결됩니다(현재 저장소 반영됨).
+  빌드는 반드시 `bridge` 폴더에서 실행해 `..\src` 상대경로가 맞도록 하세요.
 - **`build_bridge.bat` 실행 시 `'XE'…'tlook_bridge.exe' 은(는) … 아닙니다`류 오류**:
   배치 파일이 한글(UTF-8)로 저장돼 CP949 콘솔에서 깨진 경우입니다. 배치 파일은 **영문(ASCII)로만**
   유지하세요(현재 저장소의 `.bat`은 ASCII로 정리됨). 편집기에서 다시 저장할 때 한글을 넣지 마세요.
