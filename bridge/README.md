@@ -46,9 +46,14 @@ IWP 서버 `config.json`(선택):
 ```
 
 ## 엔드포인트
-- `GET /health` → `{"ok":true,"mailbox":"me@bank.com"}`
+- `GET /health` → `{"ok":true,"mailbox":"me@bank.com","version":"1.1","caps":["emails","open-email","reply-draft"]}`
 - `GET /emails?start=YYYY-MM-DD&end=YYYY-MM-DD&sender=&recipient=&attachments=0|1`
+- `GET /open-email?entry_id=&store_id=` → 본인 Outlook에서 해당 메일 창을 엽니다. **(v1.1에서 추가)**
 - `POST /reply-draft` (JSON: `entry_id`,`store_id`,`body`,`reply_all`) → 본인 Outlook에 회신 초안 창을 엽니다(자동 발송 안 함).
+
+> **버전 주의:** IWP 서버가 업데이트되어 새 엔드포인트가 추가되면, **`outlook_bridge.exe`도 다시 빌드해 재배포**해야 합니다.
+> 구버전 exe는 새 엔드포인트를 모르므로 해당 호출이 `HTTP 404`로 실패합니다(예: v1.1 이전 exe에서 "메일 열기").
+> 현재 실행 중인 브릿지 버전은 `GET /health` 의 `version`/`caps` 로 확인할 수 있습니다.
 
 ## 보안
 - `127.0.0.1` 에만 바인딩되어 외부 네트워크에 노출되지 않습니다.
@@ -59,3 +64,8 @@ IWP 서버 `config.json`(선택):
 - **"브릿지 미연결"**: `outlook_bridge.exe` 실행 여부 확인, Outlook 로그인 확인, 포트(8899) 충돌 확인.
 - **메일함이 다른 사람 것으로 보임**: 해당 PC Outlook에 로그인된 계정이 본인인지 확인.
 - **회신 초안이 안 열림**: Outlook 보안 정책(프로그래밍 방식 접근) 설정을 확인.
+- **"메일 열기" 시 `HTTP 404`**: 실행 중인 exe가 `/open-email` 미지원 **구버전(v1.1 이전)** 입니다.
+  최신 소스로 `build_bridge.bat`을 다시 실행해 exe를 재빌드·재배포하세요.
+- **`build_bridge.bat` 실행 시 `'XE'…'tlook_bridge.exe' 은(는) … 아닙니다`류 오류**:
+  배치 파일이 한글(UTF-8)로 저장돼 CP949 콘솔에서 깨진 경우입니다. 배치 파일은 **영문(ASCII)로만**
+  유지하세요(현재 저장소의 `.bat`은 ASCII로 정리됨). 편집기에서 다시 저장할 때 한글을 넣지 마세요.
