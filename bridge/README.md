@@ -29,6 +29,10 @@ build_bridge.bat
 ```
 → `bridge\dist\outlook_bridge.exe` 생성. 이 파일을 사용자에게 배포합니다.
 
+> **이 `bridge` 폴더는 자립형입니다** — Outlook 로직은 같은 폴더의 `outlook_ops.py` 에 들어 있어
+> IWP 저장소의 `src` 폴더가 없어도 빌드됩니다. 빌드 시 `bridge` 폴더 안의 파일
+> (`outlook_bridge.py`, `outlook_ops.py`, `build_bridge.bat`)이 함께 있는지만 확인하세요.
+
 ## 설정(선택)
 환경변수로 조정할 수 있습니다.
 | 변수 | 기본값 | 설명 |
@@ -66,11 +70,11 @@ IWP 서버 `config.json`(선택):
 - **회신 초안이 안 열림**: Outlook 보안 정책(프로그래밍 방식 접근) 설정을 확인.
 - **"메일 열기" 시 `HTTP 404`**: 실행 중인 exe가 `/open-email` 미지원 **구버전(v1.1 이전)** 입니다.
   최신 소스로 `build_bridge.bat`을 다시 실행해 exe를 재빌드·재배포하세요.
-- **exe 실행/조회 시 `No module named 'outlook_agent'`(또는 `logger`)**: 브릿지는 `..\src` 의
-  `outlook_agent`·`logger` 를 재사용하는데, 이 임포트가 함수 내부 지연 임포트라 PyInstaller가
-  자동 포함하지 못해 생기는 문제입니다. `build_bridge.bat` 에 `--hidden-import outlook_agent`
-  `--hidden-import logger` 가 포함된 최신 버전으로 **다시 빌드**하면 해결됩니다(현재 저장소 반영됨).
-  빌드는 반드시 `bridge` 폴더에서 실행해 `..\src` 상대경로가 맞도록 하세요.
+- **exe 실행/조회 시 `No module named 'outlook_agent'`**: 구버전 브릿지가 `..\src` 의 모듈에
+  의존하던 흔적입니다. 현재 브릿지는 **자립형**(같은 폴더 `outlook_ops.py`)이므로, 최신
+  `bridge` 폴더(= `outlook_bridge.py` + `outlook_ops.py` 포함)로 **다시 빌드**하면 해결됩니다.
+  빌드 로그에 `No module named 'outlook_ops'` 가 보이면 `outlook_ops.py` 가 `bridge` 폴더에서
+  누락된 것이니 함께 두고 다시 실행하세요.
 - **`build_bridge.bat` 실행 시 `'XE'…'tlook_bridge.exe' 은(는) … 아닙니다`류 오류**:
   배치 파일이 한글(UTF-8)로 저장돼 CP949 콘솔에서 깨진 경우입니다. 배치 파일은 **영문(ASCII)로만**
   유지하세요(현재 저장소의 `.bat`은 ASCII로 정리됨). 편집기에서 다시 저장할 때 한글을 넣지 마세요.
