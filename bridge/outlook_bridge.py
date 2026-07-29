@@ -15,7 +15,7 @@ IWP 로컬 Outlook 브릿지 — 사용자 PC에서 실행되는 작은 localhos
 엔드포인트:
   GET  /health?token=...                    → {"ok":true,"mailbox":"me@bank.com","version":...}
   GET  /emails?start=&end=&sender=&recipient=&attachments=0|1&token=...
-                                            → {"emails":[...]}   (outlook_agent.get_emails 스키마)
+                                            → {"emails":[...]}   (outlook_ops.get_emails 스키마)
   POST /reply-draft   (JSON: entry_id, store_id, body, reply_all)
                                             → {"ok":true}        본인 Outlook에 회신 초안 창을 연다
 
@@ -29,12 +29,12 @@ import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-# outlook_agent(=win32com 로직) 재사용을 위해 src 경로를 추가.
+# 같은 폴더의 자립형 Outlook 로직(win32com). ../src 에 의존하지 않는다
+# (그래야 bridge 폴더만 받아 PyInstaller 로 빌드해도 모듈이 누락되지 않음).
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_SRC = os.path.join(os.path.dirname(_HERE), "src")
-for _p in (_SRC, _HERE):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+import outlook_ops
 
 BRIDGE_VERSION = "1.1"
 # 이 브릿지가 지원하는 엔드포인트(신/구 버전 판별용). /health 로 노출한다.
@@ -50,57 +50,6 @@ ALLOW_ORIGIN = os.environ.get("IWP_BRIDGE_ORIGIN", "*").strip() or "*"
 def _log(msg: str):
     ts = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
-
-
-# ─── Outlook 헬퍼(win32com) ───────────────────────────────────────────────────
-def _default_mailbox() -> str:
-    """기본 계정의 SMTP 주소(본인 메일함 식별용)."""
-    import pythoncom
-    import win32com.client
-    pythoncom.CoInitialize()
-    try:
-        ns = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-        try:
-            acc = ns.Accounts.Item(1)  # COM 컬렉션은 1-based
-            smtp = getattr(acc, "SmtpAddress", "") or ""
-            if smtp:
-                return smtp
-            return getattr(acc, "DisplayName", "") or ""
-        except Exception:
-            try:
-                return ns.CurrentUser.Address or ""
-            except Exception:
-                return ""
-    finally:
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
-
-
-def _create_reply_draft(entry_id: str, store_id: str, body: str, reply_all: bool) -> bool:
-    """본인 Outlook에서 해당 메일의 회신 초안을 만들어 창을 연다(사용자 검토용)."""
-    import pythoncom
-    import win32com.client
-    if not entry_id:
-        return False
-    pythoncom.CoInitialize()
-    try:
-        ns = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-        item = ns.GetItemFromID(entry_id, store_id) if store_id else ns.GetItemFromID(entry_id)
-        reply = item.ReplyAll() if reply_all else item.Reply()
-        # 작성한 초안을 인용 원문 위에 삽입
-        try:
-            reply.Body = (body or "") + "\n\n" + (reply.Body or "")
-        except Exception:
-            reply.Body = body or ""
-        reply.Display()  # 사용자가 검토·발송하도록 초안 창 표시(자동 발송 안 함)
-        return True
-    finally:
-        try:
-            pythoncom.CoUninitialize()
-        except Exception:
-            pass
 
 
 # ─── HTTP 핸들러 ──────────────────────────────────────────────────────────────
@@ -148,7 +97,7 @@ class _Handler(BaseHTTPRequestHandler):
             if not self._check_token(qs):
                 return self._send_json({"ok": False, "error": "unauthorized"}, 401)
             try:
-                mbox = _default_mailbox()
+                mbox = outlook_ops.default_mailbox()
                 return self._send_json({
                     "ok": True, "mailbox": mbox,
                     "version": BRIDGE_VERSION, "caps": BRIDGE_CAPS,
@@ -160,8 +109,8 @@ class _Handler(BaseHTTPRequestHandler):
             if not self._check_token(qs):
                 return self._send_json({"ok": False, "error": "unauthorized"}, 401)
             try:
-                from outlook_agent import open_email
-                ok = open_email(qs.get("entry_id", [""])[0], qs.get("store_id", [""])[0])
+                ok = outlook_ops.open_email(
+                    qs.get("entry_id", [""])[0], qs.get("store_id", [""])[0])
                 return self._send_json({"ok": bool(ok)})
             except Exception as e:
                 _log(f"/open-email 오류: {e}")
@@ -178,8 +127,7 @@ class _Handler(BaseHTTPRequestHandler):
                 sender = qs.get("sender", [""])[0].strip()
                 recipient = qs.get("recipient", [""])[0].strip()
                 include_att = qs.get("attachments", ["0"])[0] in ("1", "true", "True")
-                from outlook_agent import get_emails
-                emails = get_emails(start, end, sender, recipient, include_att)
+                emails = outlook_ops.get_emails(start, end, sender, recipient, include_att)
                 _log(f"/emails {start}~{end} sender='{sender}' → {len(emails)}건")
                 return self._send_json({"emails": emails})
             except Exception as e:
@@ -198,7 +146,7 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 length = int(self.headers.get("Content-Length", "0") or "0")
                 data = json.loads(self.rfile.read(length) or b"{}")
-                ok = _create_reply_draft(
+                ok = outlook_ops.create_reply_draft(
                     data.get("entry_id", ""), data.get("store_id", ""),
                     data.get("body", ""), bool(data.get("reply_all", False)),
                 )
@@ -225,7 +173,7 @@ def main():
     _log(f"IWP Outlook 브릿지 v{BRIDGE_VERSION} 시작 — http://{HOST}:{PORT}")
     _log(f"토큰 인증: {'사용' if TOKEN else '미사용'} · CORS 오리진: {ALLOW_ORIGIN}")
     try:
-        mbox = _default_mailbox()
+        mbox = outlook_ops.default_mailbox()
         _log(f"연결된 메일함: {mbox or '(확인 실패 — Outlook 실행 여부 확인)'}")
     except Exception as e:
         _log(f"Outlook 확인 실패: {e} (Outlook 실행 후 재시도)")
