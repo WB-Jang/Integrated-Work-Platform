@@ -299,9 +299,12 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
         res = await _bridge_get('/open-email', {'entry_id': entry_id, 'store_id': store_id})
         if res.get('ok'):
             ui.notify('메일을 열었습니다.', type='positive', position='top')
-        else:
-            ui.notify(f"메일 열기 실패: {res.get('error', '브릿지 확인')}",
-                      type='negative', position='top')
+            return
+        err = str(res.get('error', '브릿지 확인'))
+        # 구버전 브릿지(.exe)에는 /open-email 라우트가 없어 404가 난다 → 교체 안내로 치환
+        if 'HTTP 404' in err:
+            err = '브릿지가 오래된 버전입니다 — 최신 outlook_bridge.exe로 교체하세요.'
+        ui.notify(f"메일 열기 실패: {err}", type='negative', position='top')
 
     def _render_call_rate(items: list, err: "str | None" = None):
         call_rate_slot.clear()

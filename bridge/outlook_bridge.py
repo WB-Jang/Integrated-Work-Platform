@@ -36,7 +36,9 @@ for _p in (_SRC, _HERE):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-BRIDGE_VERSION = "1.0"
+BRIDGE_VERSION = "1.1"
+# 이 브릿지가 지원하는 엔드포인트(신/구 버전 판별용). /health 로 노출한다.
+BRIDGE_CAPS = ["emails", "open-email", "reply-draft"]
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("IWP_BRIDGE_PORT", "8899"))
 # 선택적 공유 토큰(설정 시 IWP 서버 config 의 outlook_bridge_token 과 일치해야 함)
@@ -147,7 +149,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": False, "error": "unauthorized"}, 401)
             try:
                 mbox = _default_mailbox()
-                return self._send_json({"ok": True, "mailbox": mbox, "version": BRIDGE_VERSION})
+                return self._send_json({
+                    "ok": True, "mailbox": mbox,
+                    "version": BRIDGE_VERSION, "caps": BRIDGE_CAPS,
+                })
             except Exception as e:
                 return self._send_json({"ok": False, "error": f"Outlook 연결 실패: {e}"}, 500)
 
