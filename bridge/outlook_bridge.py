@@ -19,8 +19,13 @@ IWP 로컬 Outlook 브릿지 — 사용자 PC에서 실행되는 작은 localhos
   POST /reply-draft   (JSON: entry_id, store_id, body, reply_all)
                                             → {"ok":true}        본인 Outlook에 회신 초안 창을 연다
 
-보안: 127.0.0.1 에만 바인딩(외부 비노출). 선택적 토큰(IWP_BRIDGE_TOKEN)으로
-      로컬 다른 프로세스의 무단 호출을 차단할 수 있다.
+보안(secure-by-default):
+  - 127.0.0.1 에만 바인딩(외부 네트워크 비노출).
+  - 토큰(IWP_BRIDGE_TOKEN, 헤더 X-IWP-Bridge-Token) **필수** — 미설정 시 데이터/액션 요청 거부.
+  - CORS 오리진 허용목록(IWP_BRIDGE_ORIGIN) **필수** — 허용 오리진에만 응답을 노출해
+    사용자가 방문한 악성 웹사이트의 브라우저 경유 메일 탈취를 차단. 미설정 시 거부.
+  - Host 헤더를 루프백으로 검증(DNS 리바인딩 방지).
+  두 환경변수는 배포 시 반드시 설정한다(예: IWP_BRIDGE_TOKEN=..., IWP_BRIDGE_ORIGIN=http://IWP주소).
 """
 import os
 import sys
@@ -36,15 +41,33 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import outlook_ops
 
-BRIDGE_VERSION = "1.1"
+BRIDGE_VERSION = "1.2"
 # 이 브릿지가 지원하는 엔드포인트(신/구 버전 판별용). /health 로 노출한다.
 BRIDGE_CAPS = ["emails", "open-email", "reply-draft"]
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("IWP_BRIDGE_PORT", "8899"))
-# 선택적 공유 토큰(설정 시 IWP 서버 config 의 outlook_bridge_token 과 일치해야 함)
+
+# ── 보안 설정(secure-by-default) ─────────────────────────────────────────────
+# 토큰: IWP 서버 config 의 outlook_bridge_token 과 동일해야 함. **미설정 시 모든
+# 데이터/액션 요청을 거부**한다(오설정 방치 방지).
 TOKEN = os.environ.get("IWP_BRIDGE_TOKEN", "").strip()
-# CORS 허용 오리진(기본 * — IWP가 http 사내망이라 안전). 특정 오리진으로 좁힐 수 있음.
-ALLOW_ORIGIN = os.environ.get("IWP_BRIDGE_ORIGIN", "*").strip() or "*"
+# 토큰 전달 헤더(URL 쿼리 ?token= 도 하위호환으로 허용).
+TOKEN_HEADER = "X-IWP-Bridge-Token"
+# CORS 허용 오리진(콤마 구분 다중). **기본값 없음** — 배포 시 IWP 접속 주소를
+# IWP_BRIDGE_ORIGIN 환경변수로 지정해야 브라우저 요청이 허용된다(미설정 시 거부).
+# 예: IWP_BRIDGE_ORIGIN=http://iwp.example.com  또는  http://10.20.30.40:8080
+
+
+def _norm_origin(o: str) -> str:
+    return (o or "").strip().rstrip("/").lower()
+
+
+_ALLOWED_ORIGINS = {
+    _norm_origin(o) for o in os.environ.get("IWP_BRIDGE_ORIGIN", "").split(",")
+    if _norm_origin(o)
+}
+# DNS 리바인딩 방지를 위해 허용하는 Host 헤더의 호스트부.
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _log(msg: str):
@@ -60,12 +83,71 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    # ── 오리진/Host/토큰 판정 ────────────────────────────────────────────────
+    def _origin(self) -> str:
+        return _norm_origin(self.headers.get("Origin", ""))
+
+    def _origin_allowed(self, origin: str) -> bool:
+        return bool(origin) and origin in _ALLOWED_ORIGINS
+
+    def _host_ok(self) -> bool:
+        """DNS 리바인딩 방지 — Host 헤더의 호스트부가 루프백인지 확인."""
+        host = (self.headers.get("Host", "") or "").strip().lower()
+        if not host:
+            return True  # Host 없는 저수준 클라이언트(예: 일부 도구)는 통과(토큰으로 통제)
+        # IPv6 [::1]:port / host:port / host 모두 처리
+        if host.startswith("["):
+            hostname = host[1:host.find("]")] if "]" in host else host
+        else:
+            hostname = host.split(":", 1)[0]
+        return hostname in _LOOPBACK_HOSTS
+
+    def _token_ok(self) -> bool:
+        """토큰 검증. TOKEN 미설정 시 항상 False(secure-by-default → 거부)."""
+        if not TOKEN:
+            return False
+        got = (self.headers.get(TOKEN_HEADER, "") or "").strip()
+        if not got:  # 헤더 없으면 URL 쿼리(?token=) 하위호환 확인
+            qs = parse_qs(urlparse(self.path).query)
+            got = (qs.get("token", [""])[0] or "").strip()
+        return got == TOKEN
+
+    def _guard(self) -> bool:
+        """데이터/액션 요청 공통 보안 관문. 통과 시 True, 실패 시 오류 응답 후 False.
+
+        순서: Host(리바인딩) → 오리진(브라우저 탈취) → 설정 존재 → 토큰.
+        """
+        if not self._host_ok():
+            self._send_json({"error": "forbidden (host)"}, 403)
+            return False
+        origin = self._origin()
+        # 브라우저 요청(Origin 존재)은 반드시 허용 오리진과 일치해야 함
+        if origin and not self._origin_allowed(origin):
+            self._send_json({"error": "forbidden (origin)"}, 403)
+            return False
+        # secure-by-default: 필수 환경변수 미설정 시 명확히 거부
+        if not TOKEN:
+            self._send_json(
+                {"error": "브릿지 보안 미설정: IWP_BRIDGE_TOKEN 환경변수를 설정하세요."}, 503)
+            return False
+        if not _ALLOWED_ORIGINS:
+            self._send_json(
+                {"error": "브릿지 보안 미설정: IWP_BRIDGE_ORIGIN 환경변수를 설정하세요."}, 503)
+            return False
+        if not self._token_ok():
+            self._send_json({"error": "unauthorized"}, 401)
+            return False
+        return True
+
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", ALLOW_ORIGIN)
+        # 허용된 오리진일 때만 ACAO/PNA 를 발급(브라우저 응답 읽기 차단이 기본).
+        origin = self._origin()
+        if self._origin_allowed(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Private-Network", "true")
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        # 사설망 접근(PNA) 프리플라이트 대응 (공개/사설 → 로컬 요청 허용)
-        self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Access-Control-Allow-Headers", f"Content-Type, {TOKEN_HEADER}")
         self.send_header("Access-Control-Max-Age", "600")
 
     def _send_json(self, obj, status=200):
@@ -77,13 +159,13 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _check_token(self, qs) -> bool:
-        if not TOKEN:
-            return True
-        got = (qs.get("token", [""])[0] or "").strip()
-        return got == TOKEN
-
     def do_OPTIONS(self):
+        # 프리플라이트: Host·오리진만 검증(토큰은 브라우저가 프리플라이트에 안 보냄).
+        if not self._host_ok() or not self._origin_allowed(self._origin()):
+            self.send_response(403)
+            self._cors()
+            self.end_headers()
+            return
         self.send_response(204)
         self._cors()
         self.end_headers()
@@ -94,8 +176,8 @@ class _Handler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
 
         if path == "/health":
-            if not self._check_token(qs):
-                return self._send_json({"ok": False, "error": "unauthorized"}, 401)
+            if not self._guard():
+                return
             try:
                 mbox = outlook_ops.default_mailbox()
                 return self._send_json({
@@ -106,8 +188,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": False, "error": f"Outlook 연결 실패: {e}"}, 500)
 
         if path == "/open-email":
-            if not self._check_token(qs):
-                return self._send_json({"ok": False, "error": "unauthorized"}, 401)
+            if not self._guard():
+                return
             try:
                 ok = outlook_ops.open_email(
                     qs.get("entry_id", [""])[0], qs.get("store_id", [""])[0])
@@ -117,8 +199,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": False, "error": str(e)}, 500)
 
         if path == "/emails":
-            if not self._check_token(qs):
-                return self._send_json({"error": "unauthorized"}, 401)
+            if not self._guard():
+                return
             try:
                 start = _parse_date(qs.get("start", [""])[0])
                 end = _parse_date(qs.get("end", [""])[0])
@@ -139,10 +221,9 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
-        qs = parse_qs(parsed.query)
         if path == "/reply-draft":
-            if not self._check_token(qs):
-                return self._send_json({"ok": False, "error": "unauthorized"}, 401)
+            if not self._guard():
+                return
             try:
                 length = int(self.headers.get("Content-Length", "0") or "0")
                 data = json.loads(self.rfile.read(length) or b"{}")
@@ -171,7 +252,11 @@ def _parse_date(s: str):
 
 def main():
     _log(f"IWP Outlook 브릿지 v{BRIDGE_VERSION} 시작 — http://{HOST}:{PORT}")
-    _log(f"토큰 인증: {'사용' if TOKEN else '미사용'} · CORS 오리진: {ALLOW_ORIGIN}")
+    origins_disp = ", ".join(sorted(_ALLOWED_ORIGINS)) if _ALLOWED_ORIGINS else "(미설정)"
+    _log(f"보안: 토큰 {'설정됨' if TOKEN else '미설정'} · 허용 오리진: {origins_disp}")
+    if not TOKEN or not _ALLOWED_ORIGINS:
+        _log("*** 경고: IWP_BRIDGE_TOKEN / IWP_BRIDGE_ORIGIN 미설정 시 모든 요청이 거부됩니다. ***")
+        _log("***       배포 환경변수(예: set IWP_BRIDGE_TOKEN=... & set IWP_BRIDGE_ORIGIN=http://IWP주소)를 설정하세요. ***")
     try:
         mbox = outlook_ops.default_mailbox()
         _log(f"연결된 메일함: {mbox or '(확인 실패 — Outlook 실행 여부 확인)'}")
