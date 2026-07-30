@@ -188,16 +188,21 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
 
     # ── 로컬 브릿지 호출 (브라우저=사용자 PC 에서 fetch 실행) ────────────────
     async def _bridge_fetch(path: str, params: dict, timeout: float = 180):
-        """사용자 브라우저에서 127.0.0.1 브릿지로 GET 요청. dict 반환(오류 시 {'error':...})."""
-        q = dict(params)
-        if bridge_token:
-            q['token'] = bridge_token
+        """사용자 브라우저에서 127.0.0.1 브릿지로 GET 요청. dict 반환(오류 시 {'error':...}).
+
+        토큰은 X-IWP-Bridge-Token 헤더로 전달한다(브릿지 보안 하드닝 대응)."""
+        headers = {'X-IWP-Bridge-Token': bridge_token} if bridge_token else {}
         js = (
             "try {"
             f"  const base = {_json.dumps(bridge_url)};"
-            f"  const params = new URLSearchParams({_json.dumps({k: str(v) for k, v in q.items()})});"
-            f"  const r = await fetch(base + {_json.dumps(path)} + '?' + params.toString());"
-            "  if (!r.ok) return {error: 'HTTP ' + r.status};"
+            f"  const params = new URLSearchParams({_json.dumps({k: str(v) for k, v in params.items()})});"
+            f"  const r = await fetch(base + {_json.dumps(path)} + '?' + params.toString(),"
+            f"    {{headers: {_json.dumps(headers)}}});"
+            "  if (!r.ok) {"
+            "    let m = 'HTTP ' + r.status;"
+            "    try { const j = await r.json(); if (j && j.error) m = j.error; } catch (e) {}"
+            "    return {error: m, _status: r.status};"
+            "  }"
             "  return await r.json();"
             "} catch (e) { return {error: '브릿지 연결 실패: ' + String(e)}; }"
         )
@@ -208,13 +213,19 @@ def build_outlook_panel(config: dict, create_llm_fn, persona_block: str = ""):
 
     async def _bridge_post(path: str, payload: dict, timeout: float = 30):
         """브라우저에서 127.0.0.1 브릿지로 POST(JSON). dict 반환."""
-        url = bridge_url + path + (f'?token={bridge_token}' if bridge_token else '')
+        headers = {'Content-Type': 'application/json'}
+        if bridge_token:
+            headers['X-IWP-Bridge-Token'] = bridge_token
         js = (
             "try {"
-            f"  const r = await fetch({_json.dumps(url)}, {{"
-            "     method: 'POST', headers: {'Content-Type': 'application/json'},"
+            f"  const r = await fetch({_json.dumps(bridge_url + path)}, {{"
+            f"     method: 'POST', headers: {_json.dumps(headers)},"
             f"     body: JSON.stringify({_json.dumps(payload)}) }});"
-            "  if (!r.ok) return {ok:false, error: 'HTTP ' + r.status};"
+            "  if (!r.ok) {"
+            "    let m = 'HTTP ' + r.status;"
+            "    try { const j = await r.json(); if (j && j.error) m = j.error; } catch (e) {}"
+            "    return {ok:false, error: m, _status: r.status};"
+            "  }"
             "  return await r.json();"
             "} catch (e) { return {ok:false, error: '브릿지 연결 실패: ' + String(e)}; }"
         )

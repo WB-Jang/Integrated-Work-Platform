@@ -275,16 +275,21 @@ def build_rates_panel(config: dict, app_state: "dict | None" = None):
     _CALL_RE = _re.compile(r'(\d{1,2}\.\d{2,4})')
 
     async def _bridge_get(path: str, params: dict, timeout: float = 30):
-        """브라우저(사용자 PC)에서 127.0.0.1 브릿지로 GET. dict 반환."""
-        q = dict(params)
-        if bridge_token:
-            q['token'] = bridge_token
+        """브라우저(사용자 PC)에서 127.0.0.1 브릿지로 GET. dict 반환.
+
+        토큰은 X-IWP-Bridge-Token 헤더로 전달한다(브릿지 보안 하드닝 대응)."""
+        headers = {'X-IWP-Bridge-Token': bridge_token} if bridge_token else {}
         js = (
             "try {"
             f"  const base = {_json.dumps(bridge_url)};"
-            f"  const params = new URLSearchParams({_json.dumps({k: str(v) for k, v in q.items()})});"
-            f"  const r = await fetch(base + {_json.dumps(path)} + '?' + params.toString());"
-            "  if (!r.ok) return {error: 'HTTP ' + r.status};"
+            f"  const params = new URLSearchParams({_json.dumps({k: str(v) for k, v in params.items()})});"
+            f"  const r = await fetch(base + {_json.dumps(path)} + '?' + params.toString(),"
+            f"    {{headers: {_json.dumps(headers)}}});"
+            "  if (!r.ok) {"
+            "    let m = 'HTTP ' + r.status;"
+            "    try { const j = await r.json(); if (j && j.error) m = j.error; } catch (e) {}"
+            "    return {error: m, _status: r.status};"
+            "  }"
             "  return await r.json();"
             "} catch (e) { return {error: '브릿지 연결 실패: ' + String(e)}; }"
         )

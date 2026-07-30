@@ -33,24 +33,33 @@ build_bridge.bat
 > IWP 저장소의 `src` 폴더가 없어도 빌드됩니다. 빌드 시 `bridge` 폴더 안의 파일
 > (`outlook_bridge.py`, `outlook_ops.py`, `build_bridge.bat`)이 함께 있는지만 확인하세요.
 
-## 설정(선택)
-환경변수로 조정할 수 있습니다.
-| 변수 | 기본값 | 설명 |
-|---|---|---|
-| `IWP_BRIDGE_PORT` | `8899` | 브릿지 포트 |
-| `IWP_BRIDGE_TOKEN` | (없음) | 설정 시 IWP `config.json`의 `outlook_bridge_token` 과 동일해야 호출 허용 |
-| `IWP_BRIDGE_ORIGIN` | `*` | CORS 허용 오리진(특정 IWP 주소로 좁힐 수 있음) |
+## 설정 (환경변수)
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `IWP_BRIDGE_TOKEN` | **필수** | (없음) | IWP `config.json`의 `outlook_bridge_token` 과 **동일**해야 함. 미설정 시 모든 데이터/액션 요청 거부 |
+| `IWP_BRIDGE_ORIGIN` | **필수** | (없음) | CORS 허용 오리진 = **IWP 접속 주소**(예: `http://iwp.example.com`). 콤마로 다중 지정 가능. 미설정 시 브라우저 요청 거부 |
+| `IWP_BRIDGE_PORT` | 선택 | `8899` | 브릿지 포트 |
 
-IWP 서버 `config.json`(선택):
+배포 예(Windows, 브릿지 실행 직전):
+```
+set IWP_BRIDGE_TOKEN=길고-무작위한-공유토큰
+set IWP_BRIDGE_ORIGIN=http://iwp.example.com
+outlook_bridge.exe
+```
+
+IWP 서버 `config.json`:
 ```json
 {
   "outlook_bridge_url": "http://127.0.0.1:8899",
-  "outlook_bridge_token": ""
+  "outlook_bridge_token": "길고-무작위한-공유토큰"
 }
 ```
+> 토큰은 **브릿지(`IWP_BRIDGE_TOKEN`)와 IWP 서버(`outlook_bridge_token`)에 같은 값**을 넣어야 합니다.
+> `IWP_BRIDGE_ORIGIN` 은 사용자가 브라우저에서 IWP에 접속하는 주소(스킴+호스트+포트)와 일치해야 합니다.
 
 ## 엔드포인트
-- `GET /health` → `{"ok":true,"mailbox":"me@bank.com","version":"1.1","caps":["emails","open-email","reply-draft"]}`
+- `GET /health` → `{"ok":true,"mailbox":"me@bank.com","version":"1.2","caps":["emails","open-email","reply-draft"]}`
+  - 모든 엔드포인트는 `X-IWP-Bridge-Token` 헤더와 허용 오리진(`IWP_BRIDGE_ORIGIN`)이 필요합니다.
 - `GET /emails?start=YYYY-MM-DD&end=YYYY-MM-DD&sender=&recipient=&attachments=0|1`
 - `GET /open-email?entry_id=&store_id=` → 본인 Outlook에서 해당 메일 창을 엽니다. **(v1.1에서 추가)**
 - `POST /reply-draft` (JSON: `entry_id`,`store_id`,`body`,`reply_all`) → 본인 Outlook에 회신 초안 창을 엽니다(자동 발송 안 함).
@@ -59,10 +68,15 @@ IWP 서버 `config.json`(선택):
 > 구버전 exe는 새 엔드포인트를 모르므로 해당 호출이 `HTTP 404`로 실패합니다(예: v1.1 이전 exe에서 "메일 열기").
 > 현재 실행 중인 브릿지 버전은 `GET /health` 의 `version`/`caps` 로 확인할 수 있습니다.
 
-## 보안
-- `127.0.0.1` 에만 바인딩되어 외부 네트워크에 노출되지 않습니다.
-- 토큰을 설정하면 로컬의 다른 프로세스가 무단 호출하는 것을 막을 수 있습니다.
+## 보안 (secure-by-default)
+- **루프백 바인딩**: `127.0.0.1` 에만 리슨 → 외부 네트워크 비노출.
+- **토큰 필수**: `IWP_BRIDGE_TOKEN` 미설정 시 데이터/액션 요청을 모두 거부. 토큰은
+  `X-IWP-Bridge-Token` 헤더로 전달됩니다(URL 쿼리 `?token=` 도 하위호환 허용).
+- **CORS 오리진 고정**: 허용 오리진(`IWP_BRIDGE_ORIGIN`)에만 응답을 노출 → 사용자가
+  방문한 **악성 웹사이트가 브라우저를 통해 메일을 탈취**하는 경로를 차단. 미설정 시 거부.
+- **DNS 리바인딩 방지**: `Host` 헤더를 루프백으로 검증.
 - IWP는 `http://` 사내망 접속이라 혼합 콘텐츠(mixed content) 문제가 없습니다.
+- (권장) 배포 exe **코드서명**, 팀별로 다른 무작위 토큰 사용.
 
 ## 문제 해결
 - **"브릿지 미연결"**: `outlook_bridge.exe` 실행 여부 확인, Outlook 로그인 확인, 포트(8899) 충돌 확인.
